@@ -87,7 +87,7 @@ def main():
     args = parser.parse_args()
 
     result = calibrate(CoordinateReader.from_settings(settings),
-                       Screen(settings.monitor_index), args.mode)
+                       Screen.from_settings(settings), args.mode)
     if result and args.save:
         path = settings.path("vehicles")
         try:

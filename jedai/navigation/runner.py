@@ -31,7 +31,7 @@ class NavigationRunner:
             print("--- Initialising Vision Systems ---")
             hud = HudReader.from_settings(settings)
         self.hud = hud
-        self.screen = screen or Screen(settings.monitor_index)
+        self.screen = screen or Screen.from_settings(settings)
         self.keys = keys or KeyClient(CommandChannel(settings.path("command_file")))
 
         self.vehicle_speeds = settings.load_vehicles()
@@ -62,7 +62,7 @@ class NavigationRunner:
 
     # =========================================================================
     def should_stop(self) -> bool:
-        return kill_pressed(self.s.kill_key)
+        return kill_pressed(self.s.kill_key, self.s)
 
     def apply_vehicle(self, key):
         cfg = self.vehicle_speeds.get(key) or self.vehicle_speeds.get("swoop", {"max": 16.0})

@@ -12,6 +12,9 @@ scikit-learn          # cluster.py (CLIP experiment)
 keyboard; sys_platform == "win32"
 pydirectinput; sys_platform == "win32"
 
+# Linux: send keys / read the kill key through X11 (works with the game in its own Xwayland display)
+python-xlib; sys_platform == "linux"
+
 # Optional
 # pytesseract         # tools/validation/test_hud_ocr.py (+ Tesseract installed)
 # label-studio        # tools/labeling/start_label_studio.py

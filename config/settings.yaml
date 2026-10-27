@@ -20,6 +20,13 @@ paths:
 
 screen:
   monitor_index: 2              # which monitor the game is on (mss numbering, 1 = primary)
+                                # Linux with the game in its own X display: use 1
+
+platform:
+  input_backend: auto           # auto | pydirectinput (Windows) | xtest (Linux, X11 / Xwayland)
+  x_display: ""                 # Linux: X display the game runs on, e.g. ":2" (scripts/linux/start_swg.sh).
+                                # Keys are sent to and screenshots taken from this display only.
+                                # "" = use $DISPLAY
 
 game:
   planet: naboo                 # grid map is stored per planet

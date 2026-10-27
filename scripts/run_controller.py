@@ -9,7 +9,10 @@ import _bootstrap  # noqa: F401
 from jedai.config import settings
 from jedai.control.channel import CommandChannel
 from jedai.control.controller import MasterController
+from jedai.platform_io import backend_name, make_input, make_key_state, x_display_name
 
 if __name__ == "__main__":
-    MasterController(CommandChannel(settings.path("command_file")),
-                     settings.keys, settings.kill_key).run()
+    print(f"Input backend: {backend_name(settings)}"
+          + (f" on X display {x_display_name(settings)}" if backend_name(settings) == "xtest" else ""))
+    MasterController(CommandChannel(settings.path("command_file")), settings.keys, settings.kill_key,
+                     make_input(settings), make_key_state(settings)).run()

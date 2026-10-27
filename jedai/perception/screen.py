@@ -7,17 +7,34 @@ import numpy as np
 
 
 class Screen:
-    """Grabs frames from one monitor as BGR numpy arrays."""
+    """
+    Grabs frames from one monitor as BGR numpy arrays.
+    On Linux `display` picks the X display (e.g. ":2", the game's own window).
+    """
 
-    def __init__(self, monitor_index: int):
+    def __init__(self, monitor_index: int, display: str | None = None):
         self.monitor_index = monitor_index
+        self.display = display
+        self._sct = None
+
+    @classmethod
+    def from_settings(cls, settings):
+        from ..platform_io import capture_display
+        return cls(settings.monitor_index, capture_display(settings))
+
+    def _mss(self):
+        if self._sct is None:
+            import mss  # imported here so offline tools/tests don't need it
+            self._sct = mss.mss(display=self.display) if self.display else mss.mss()
+        return self._sct
 
     def grab(self) -> np.ndarray:
-        import mss  # imported here so offline tools/tests don't need it
-
-        with mss.mss() as sct:
-            sct_img = sct.grab(sct.monitors[self.monitor_index])
-            return cv2.cvtColor(np.array(sct_img), cv2.COLOR_BGRA2BGR)
+        sct = self._mss()
+        mons = sct.monitors
+        if self.monitor_index >= len(mons):
+            raise RuntimeError(f"screen.monitor_index {self.monitor_index} doesn't exist; "
+                               f"this display has monitors 1..{len(mons) - 1}")
+        return cv2.cvtColor(np.array(sct.grab(mons[self.monitor_index])), cv2.COLOR_BGRA2BGR)
 
 
 def safe_crop(img, x1, y1, x2, y2):

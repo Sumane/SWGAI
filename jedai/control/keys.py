@@ -10,10 +10,18 @@ import time
 from .channel import CommandChannel
 
 
-def kill_pressed(kill_key: str) -> bool:
-    import keyboard  # Windows key state; imported lazily for offline use
+_key_state = None
 
-    return keyboard.is_pressed(kill_key)
+
+def kill_pressed(kill_key: str, settings=None) -> bool:
+    """True while the kill key is held (Windows: keyboard lib; Linux: X key state)."""
+    global _key_state
+    if _key_state is None:
+        if settings is None:
+            from ..config import settings
+        from ..platform_io import make_key_state
+        _key_state = make_key_state(settings)
+    return _key_state.is_pressed(kill_key)
 
 
 class KeyClient:

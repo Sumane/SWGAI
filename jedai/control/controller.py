@@ -20,10 +20,11 @@ class MasterController:
         self.channel = channel
         self.keymap = {k: v for k, v in keymap.items() if k != "kill"}
         self.kill_key = kill_key
-        if input_backend is None:
-            import pydirectinput as input_backend
-        if key_state is None:
-            import keyboard as key_state
+        if input_backend is None or key_state is None:
+            from ..config import settings
+            from ..platform_io import make_input, make_key_state
+            input_backend = input_backend or make_input(settings)
+            key_state = key_state or make_key_state(settings)
         self.input = input_backend
         self.key_state = key_state
         self.autorun_on = False

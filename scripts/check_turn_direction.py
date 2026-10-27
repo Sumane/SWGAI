@@ -35,7 +35,7 @@ def heading(coords, screen, keys, seconds=1.5):
 
 def main():
     coords = CoordinateReader.from_settings(settings)
-    screen = Screen(settings.monitor_index)
+    screen = Screen.from_settings(settings)
     keys = KeyClient(CommandChannel(settings.path("command_file")))
     print("Switch to the game... starting in 4s")
     time.sleep(4)
