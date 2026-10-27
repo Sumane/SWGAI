@@ -86,6 +86,10 @@ class Navigator:
         self._recal_visited = set()
         self._recal_origin = None
         self._recal_cycles = 0
+        self._track = deque(maxlen=2000)   # where the bot has been (for backtracking)
+        self._escape = None                # {"until", "target", "why"} after an unstick
+        self._backtracks = 0
+        self._pushes = []                  # (pos, heading) each time it got stuck here
 
     @property
     def mounted(self) -> bool:
@@ -94,6 +98,7 @@ class Navigator:
 
     def after_dismount(self):
         """Back on foot: start recalibration afresh, now with mapping."""
+        self._escape = None
         self.state = self.MOVING
         self._stop_ticks = 0
         self._pos_hist = deque()
@@ -306,9 +311,16 @@ class Navigator:
                     steps = max(1, int(d / self.cell))
                     for i in range(steps + 1):
                         t = i / steps
-                        self.mark(self._last_mark_pos[0] + t * (pos[0] - self._last_mark_pos[0]),
-                                   self._last_mark_pos[1] + t * (pos[1] - self._last_mark_pos[1]),
-                                   CLEAR)
+                        x = self._last_mark_pos[0] + t * (pos[0] - self._last_mark_pos[0])
+                        z = self._last_mark_pos[1] + t * (pos[1] - self._last_mark_pos[1])
+                        # FIX (in-game, Theed): the straight line between two reads
+                        # 2 s apart cuts corners, and it was re-clearing cells the
+                        # bot had just found blocked, so D* sent it back into the
+                        # same wall 31 times. Only a cell the bot was actually read
+                        # standing in (the ends of the line) may clear a block.
+                        if 0 < i < steps and self.r.db.get_state(self.r.planet, x, z) == BLOCKED:
+                            continue
+                        self.mark(x, z, CLEAR)
                 else:
                     self.mark(pos[0], pos[1], CLEAR)
                 self._last_mark_pos = pos
@@ -356,12 +368,19 @@ class Navigator:
         just behind it.
         """
         n = int(self.cfg.get("steer_lookahead_cells", 3))
+        # FIX: at ~2 s per tick a runner covers 20 m between steering decisions,
+        # so a point 15 m ahead was behind it by the next tick and it circled.
+        # Look at least 1.5 ticks of travel ahead.
+        speed = float(getattr(self.r, "max_speed", 0) or 0)
+        n = max(n, int(math.ceil(1.5 * speed * self._tick_dt / self.cell)))
         path = self.r.planner.get_planned_path(max_steps=n + 1)
         if len(path) > 1:
             return path[min(n, len(path) - 1)]
         return self.r.planner.next_waypoint()
 
     _behind_turn = 0
+    _tick_dt = 0.5           # seconds per main-loop tick (measured)
+    _last_tick_t = None
     steer_angle_deg = 0.0
 
     def _cell_of(self, wx, wz):
@@ -680,6 +699,13 @@ class Navigator:
           "DISMOUNT"    stuck twice in the same place on a vehicle: get off
         """
         self._last_arrow = arrow
+        now = time.time()
+        if self._last_tick_t is not None and 0 < now - self._last_tick_t < 10:
+            self._tick_dt = 0.8 * self._tick_dt + 0.2 * (now - self._last_tick_t)
+        self._last_tick_t = now
+        if pos is not None and (not self._track or math.hypot(
+                pos[0] - self._track[-1][0], pos[1] - self._track[-1][1]) >= 2.0):
+            self._track.append(pos)
         if self.state == self.MOVING:
             self.update_heading(pos, during_clean_movement=True)
             self._check_heading_against_arrow(pos, arrow)
@@ -704,6 +730,23 @@ class Navigator:
                 print("\n[NAV] Moving but getting nowhere (grinding along a wall?)")
                 self._mark_grind_wall(self._grind_track)
                 return self._enter_recal(pos)
+
+            # After an unstick, keep going the new way for a while before D*
+            # gets the wheel back. FIX (in-game, Theed): D* turned straight back
+            # into the same wall after every 2 s unstick, 31 times in a row.
+            esc = self._escape
+            if esc is not None and pos is not None and esc["why"] == "follow":
+                if self._follow_step(pos, esc):
+                    self.steer_by, self.last_waypoint = "follow", esc["target"]
+                    return self.steer_toward(pos, *esc["target"])
+                esc = self._escape = None
+            if esc is not None and pos is not None:
+                if time.time() < esc["until"] and \
+                        math.hypot(esc["target"][0] - pos[0], esc["target"][1] - pos[1]) > 8.0:
+                    self.steer_by, self.last_waypoint = esc["why"], esc["target"]
+                    return self.steer_toward(pos, *esc["target"])
+                self._escape = None
+                self._ev("escape_done", pos=pos, why=esc["why"])
 
             if self.r.planner_active and self.r.planner.has_path():
                 wp = self.lookahead_waypoint()
@@ -832,8 +875,14 @@ class Navigator:
             # a whole cell (5 m) ahead: pressed against a wall the bot is often
             # already reported inside the wall's cell, and marking the cell
             # beyond it left D* routing through the real obstacle forever.
-            bx = pos[0] + self.heading[0] * 1.0
-            bz = pos[1] + self.heading[1] * 1.0
+            # The first point along the heading that's in a different cell: the
+            # cell it's standing in is walkable, and marking it blocked just got
+            # it re-cleared as the bot moved off (and the wall forgotten).
+            own = self._cell_of(*pos)
+            for k in (1.0, 2.0, 3.0, 4.0, 5.0):
+                bx, bz = pos[0] + self.heading[0] * k, pos[1] + self.heading[1] * k
+                if self._cell_of(bx, bz) != own:
+                    break
             self.mark(bx, bz, BLOCKED, replan_now=True)
 
         # FIX: guard pos=None (the original crashed here if coords weren't read)
@@ -846,6 +895,10 @@ class Navigator:
                 self._recal_origin = pos
             else:
                 self._recal_cycles += 1
+            if self._recal_cycles == 0:
+                self._pushes = []
+            if self.heading is not None:
+                self._pushes.append((pos, self.heading))
 
             stuck_count = self._recal_cycles + 1
             if self.mounted and stuck_count >= self.cfg["dismount_after_stuck"]:
@@ -871,7 +924,11 @@ class Navigator:
         """
         c, keys = self.cfg, self.r.keys
         n = self._recal_cycles                       # times stuck here before
+        if n + 1 >= int(c.get("backtrack_after_stuck", 4)) and self._track:
+            return self._backtrack(pos)
         side = self._unstick_side(pos, n)
+        if c.get("wall_follow", True) and self.heading is not None and pos is not None:
+            return self._start_follow(pos, side, n)
         angle = min(45.0 * (1 + n // 2), 135.0)      # widen the turn if it keeps happening
         turn_rate = float(getattr(self.r, "turn_rate_deg_s", None) or c.get("turn_rate_deg_s", 100.0))
         back_s = float(c.get("unstick_back_secs", 1.0))
@@ -902,12 +959,130 @@ class Navigator:
             fd = self.r.read_target_distance()
             if fd is not None:
                 self.observe_target(end, fd, None)
+        if end is not None and self.heading is not None:
+            secs = min(2.0 + 2.0 * n, 10.0)
+            self._escape = {"until": time.time() + secs, "why": "escape",
+                            "target": (end[0] + self.heading[0] * 60, end[1] + self.heading[1] * 60)}
         self.state = self.MOVING
         self._pos_hist = deque()
         self._stop_ticks = 0
         self._prev_pos = end
         if self.r.planner_active and end is not None:
             self.r.planner.update_start(end[0], end[1])
+        return True
+
+    @staticmethod
+    def _rot(v, deg):
+        a = math.radians(deg)
+        return (v[0] * math.cos(a) - v[1] * math.sin(a), v[0] * math.sin(a) + v[1] * math.cos(a))
+
+    def _start_follow(self, pos, side, n):
+        """
+        Follow the wall: back off a little, then drive along it angled ~30° into
+        it. SWG slides a character along a wall it pushes into at an angle, so
+        this runs along the wall until it ends, then D* takes over again.
+        side +1 = follow to the right of the way it was facing, -1 = left.
+        (A building is passed in one go instead of one 5 m cell per bump.)
+        """
+        c, keys = self.cfg, self.r.keys
+        into = self.heading                                   # facing the wall
+        sign = int(c.get("right_turn_sign", -1))
+        # "right" in screen terms is a rotation by sign*90 in X/Z
+        along = self._rot(into, side * sign * 90.0)
+        desired = self._rot(into, side * sign * float(c.get("follow_angle_deg", 60.0)))
+        turn_rate = float(getattr(self.r, "turn_rate_deg_s", None) or c.get("turn_rate_deg_s", 100.0))
+        print(f"\n[FOLLOW] Following the wall to the {'RIGHT' if side > 0 else 'LEFT'} "
+              f"(stuck {n + 1}x here)")
+        self._ev("follow", pos=pos, side="RIGHT" if side > 0 else "LEFT", into=into, times_here=n + 1)
+        keys.stop_movement()
+        keys.key_up("FORWARD")
+        keys.key_down("BACK"); time.sleep(float(c.get("unstick_back_secs", 1.0)) / 2); keys.key_up("BACK")
+        keys.tap("RIGHT" if side > 0 else "LEFT", float(c.get("follow_angle_deg", 60.0)) / turn_rate)
+        self._seed_heading(desired)
+        self._escape = {"why": "follow", "until": time.time() + float(c.get("follow_secs", 30.0)),
+                        "desired": desired, "along": along, "free": 0,
+                        "target": (pos[0] + desired[0] * 60, pos[1] + desired[1] * 60), "last": pos}
+        self.state = self.MOVING
+        self._pos_hist = deque()
+        self._stop_ticks = 0
+        self._prev_pos = pos
+        return True
+
+    def _follow_step(self, pos, esc):
+        """Keep following? Updates the steering target. Ends when the wall does, or on timeout."""
+        if time.time() > esc["until"]:
+            self._ev("follow_done", pos=pos, why="timeout")
+            return False
+        lx, lz = esc["last"]
+        dx, dz = pos[0] - lx, pos[1] - lz
+        d = math.hypot(dx, dz)
+        if d >= 3.0:
+            esc["last"] = pos
+            mx, mz = dx / d, dz / d
+            # moving the way it's facing (not sliding sideways) = clear of the wall
+            dot = mx * esc["desired"][0] + mz * esc["desired"][1]
+            if dot > math.cos(math.radians(25)):
+                esc["free"] += 1
+            else:
+                esc["free"] = 0
+                # Sliding: the wall is on the side it's pushing towards. Map it
+                # (on foot), so D* doesn't send the bot back along it later.
+                wx, wz = esc["desired"][0] - dot * mx, esc["desired"][1] - dot * mz
+                wn = math.hypot(wx, wz)
+                if wn > 0.2 and not self.mounted:
+                    for px, pz in ((lx, lz), (pos[0], pos[1])):
+                        bx, bz = px + wx / wn * 2.5, pz + wz / wn * 2.5
+                        if self._cell_of(bx, bz) != self._cell_of(px, pz):
+                            self.mark(bx, bz, BLOCKED)
+            if esc["free"] >= 2:
+                print("\n[FOLLOW] Past the wall — back to D*")
+                self._ev("follow_done", pos=pos, why="past the wall")
+                self._recal_cycles = 0
+                self._recal_origin = None
+                return False
+        esc["target"] = (pos[0] + esc["desired"][0] * 60, pos[1] + esc["desired"][1] * 60)
+        return True
+
+    def _backtrack(self, pos):
+        """
+        Stuck here again and again: it's a pocket. Go back the way it came, far
+        enough to be out of it, and mark where it kept pushing (on foot) so D*
+        plans another way in.
+        """
+        c, keys = self.cfg, self.r.keys
+        self._backtracks += 1
+        origin = self._recal_origin or pos
+        need = float(c.get("backtrack_m", 40.0)) * self._backtracks
+        target = None
+        for p in reversed(self._track):
+            if math.hypot(p[0] - origin[0], p[1] - origin[1]) >= need:
+                target = p
+                break
+        if target is None:
+            target = self._track[0]
+        marked = 0
+        if not self.mounted:
+            for (px, pz), (hx, hz) in self._pushes:
+                for k in (1.0, 3.0, 5.0):
+                    if self.mark(px + hx * k, pz + hz * k, BLOCKED):
+                        marked += 1
+        print(f"\n[BACKTRACK] Stuck {self._recal_cycles + 1}x here: going back to "
+              f"({target[0]:.0f},{target[1]:.0f}), {need:.0f} m back along its track"
+              + (f"; {marked} pushed-into cells marked blocked" if marked else ""))
+        self._ev("backtrack", pos=pos, target=target, times=self._backtracks, marked=marked)
+        keys.stop_movement()
+        keys.key_up("FORWARD")
+        keys.key_down("BACK"); time.sleep(float(c.get("unstick_back_secs", 1.0))); keys.key_up("BACK")
+        self._escape = {"until": time.time() + float(c.get("backtrack_secs", 25.0)),
+                        "target": target, "why": "backtrack"}
+        self._recal_cycles = 0
+        self._recal_origin = None
+        self._pushes = []
+        self.state = self.MOVING
+        self._pos_hist = deque()
+        self._stop_ticks = 0
+        if pos is not None:
+            self._prev_pos = pos
         return True
 
     def _unstick_side(self, pos, n):

@@ -163,6 +163,7 @@ class SimScreen:
 
 
 WALL = ((140, -60, 150, 60),)
+POCKET = ((140, -60, 150, 60), (60, 60, 150, 70), (60, -70, 150, -60))
 
 
 @pytest.mark.parametrize("walls,clockwise,sign,arrives", [
@@ -210,7 +211,8 @@ def test_mounted_bot_dismounts_at_a_wall_and_only_blocks_on_foot(tmp_path, monke
     answers = iter(["", "0"])                     # default vehicle (swoop), waypoint 0
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
 
-    world = World(clock, target=(400.0, 0.0), walls=WALL, right_is_clockwise=True)
+    # A dead-end pocket: a swoop can slide along a plain wall now, but not out of this
+    world = World(clock, target=(400.0, 0.0), walls=POCKET, right_is_clockwise=True)
     s = load_settings(local_file="none.yaml")
     s.raw["paths"]["nav_db"] = str(tmp_path / "nav.db")
     s.raw["navigation"]["right_turn_sign"] = -1
@@ -344,4 +346,32 @@ def test_run_is_recorded(tmp_path, monkeypatch):
         assert (run / name).exists(), name
     assert list((run / "shots").glob("*.jpg"))
     kinds = (run / "events.jsonl").read_text()
-    assert '"stuck"' in kinds and '"unstick"' in kinds and '"end"' in kinds
+    assert '"stuck"' in kinds and ('"unstick"' in kinds or '"follow"' in kinds) and '"end"' in kinds
+
+
+@pytest.mark.parametrize("walls", [
+    ((140, -150, 150, 150),),                                           # 300 m wall
+    ((140, -100, 150, 100), (40, 100, 150, 110), (40, -110, 150, -100)),  # dead-end pocket
+], ids=["300m-wall", "dead-end-pocket"])
+def test_long_wall_and_pocket_with_slow_vision(tmp_path, monkeypatch, walls):
+    """
+    In-game (Theed): stuck 31 times within 20 m, D* steering straight back into
+    the same wall after every unstick. Wall-following (angled into the wall so
+    the game slides the bot along it) gets round; v0.20 logic and the first
+    unstick version both failed these in 15 minutes.
+    """
+    clock = Clock()
+    for mod in (nav_mod, runner_mod):
+        monkeypatch.setattr(mod.time, "time", clock.time)
+        monkeypatch.setattr(mod.time, "sleep", clock.sleep)
+    answers = iter(["", "0"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    world = World(clock, target=(400.0, 0.0), walls=walls, right_is_clockwise=True)
+    s = load_settings(local_file="none.yaml")
+    s.raw["paths"]["nav_db"] = str(tmp_path / "nav.db")
+    r = NavigationRunner(s, hud=SimHud(world), keys=SimKeys(world, clock),
+                         screen=SlowScreen(world, clock))
+    r.vel_tracker._clock = clock.time
+    r.should_stop = lambda: clock.t > 1000 + 900
+    r.navigate()
+    assert world.dist() <= s.nav["stop_dist"], f"ended {world.dist()}m away"

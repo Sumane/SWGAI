@@ -95,6 +95,12 @@ navigation:
   turn_rate_deg_s: 100.0        # how fast LEFT/RIGHT turn (scan_turn_time 0.9 s x 4 steps ~ 360°)
   unstick_back_secs: 1.0        # stuck: reverse this long,
   unstick_forward_secs: 2.0     #   turn 45° (wider if it keeps happening), drive this long
+  wall_follow: true             # stuck: follow the wall (angled into it, the game slides you along)
+  follow_angle_deg: 60.0        #   turn this far from facing the wall (90 = parallel)
+  follow_secs: 30.0             #   give up following after this long
+  backtrack_after_stuck: 4      # stuck this often in one place: go back the way it came
+  backtrack_m: 40.0             #   this far along its track (more each time)
+  backtrack_secs: 25.0          #   giving up after this long
   heading_min_move_m: 3.0       # heading from moves at least this long (coords are whole metres)
   grind_window_s: 6.0           # moving but covered less than grind_min_m in this long = stuck
   grind_min_m: 8.0              #   (the game slides you along walls, so speed alone misses it)

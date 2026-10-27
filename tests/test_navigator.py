@@ -185,6 +185,7 @@ def test_unstick_backs_off_turns_and_goes(nav, monkeypatch):
     monkeypatch.setattr("time.sleep", lambda s: None)
     positions = iter([(0.0, 0.0), (0.0, -10.0)])
     nav.r.read_position = lambda: next(positions, (0.0, -10.0))
+    nav.cfg = dict(nav.cfg, wall_follow=False)
     nav.heading = (1.0, 0.0)
     nav._last_arrow = "E"                              # target on the right
     assert nav.do_recal((0, 0)) is True and nav.state == Navigator.MOVING
@@ -234,4 +235,23 @@ def test_on_foot_never_dismounts_and_maps(nav):
     nav.heading = (1.0, 0.0)
     for _ in range(3):
         assert nav._enter_recal((100, 100)) == "STOP"
-    assert nav.r.db.get_state("naboo", 101, 100) == BLOCKED  # cell just ahead marked
+    assert nav.r.db.get_state("naboo", 105, 100) == BLOCKED  # the next cell along the heading
+
+
+def test_stuck_starts_wall_following_angled_into_the_wall(nav, monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    nav.heading = (1.0, 0.0)                     # facing the wall (east)
+    nav._last_arrow = "E"                        # target to the right
+    assert nav.do_recal((0, 0)) is True
+    esc = nav._escape
+    assert esc["why"] == "follow"
+    # RIGHT of east is south (-Z) with the measured convention; 60° from the wall
+    assert esc["desired"][1] < -0.8 and esc["desired"][0] > 0.4
+    # sliding south along the wall keeps following
+    assert nav._follow_step((0.0, -5.0), esc) is True
+    # moving freely the way it faces twice = past the wall
+    p = (0.0, -5.0)
+    for _ in range(2):
+        p = (p[0] + esc["desired"][0] * 5, p[1] + esc["desired"][1] * 5)
+        still = nav._follow_step(p, esc)
+    assert still is False
