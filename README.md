@@ -106,10 +106,22 @@ simulated world (`tests/test_simulated_drive.py`) turned up two things:
   matched, it arrives every time. That's very likely why none of the 13 logged
   v0.20 runs completed. `scripts/check_turn_direction.py` measured it, and the
   default is now fixed.
-- **Obstacles are handled very inefficiently.** Every "try this cell" drives
-  forward for a fixed 3–4 seconds, which is 48–64 m on a swoop for a 5–20 m
-  target. A 400 m trip past a wall took 2–3 km of driving, and a 400 m long
-  wall wasn't solved at all. This is the strongest lead for the city looping.
+- **Obstacles were handled very inefficiently.** Every "try this cell" drove
+  forward for a fixed 3–4 seconds (48–64 m on a swoop for a 5–20 m target),
+  and sliding along a wall counted as reaching a cell inside it. Once the
+  simulator stopped letting the bot tunnel through walls, the v0.20 logic
+  failed every wall case. Now it gets round a 120 m wall every time, but a
+  300 m wall still takes too long: the next thing to work on.
+
+**First in-game drive (27 Oct 2026).** Turning, coordinates and the waypoint
+reader all worked, but D\* drove *away* from a waypoint 2.9 km off. The target
+was estimated once, from the first moment the arrow read N, as "straight ahead
+at that distance". N only means within ±22.5°, which at 3 km is up to 1.1 km
+sideways, and the estimate was never refreshed. It's now trilaterated from a
+reading every 5 m: the distance is exact to the metre, so the circles meet at
+the waypoint. In the simulator, 3 km targets now arrive, with the estimate
+within 8–25 m. Fixing it also turned up a D\* heuristic in the wrong units,
+which made planned paths loop.
 
 **Mounted vs on foot.** CLEAR cells are mapped either way: a cell the bot
 drove through is clear. BLOCKED cells are only mapped on foot, because a
@@ -128,7 +140,7 @@ in [docs/REORGANISATION.md](docs/REORGANISATION.md).
 - node loss
 
 The replacement design has two parts:
-- trilateration of the target from several waypoint-distance readings, by least squares
+- trilateration of the target from several waypoint-distance readings, by least squares (**done**, Oct 2026: `jedai/navigation/target_estimator.py`)
 - an A* planner with string-pulling over the sparse SQLite grid
 
 ## The bigger plan

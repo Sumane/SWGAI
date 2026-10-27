@@ -45,11 +45,6 @@ def nav(tmp_path):
     return Navigator(FakeRunner(tmp_path), CFG)
 
 
-def test_project_target_ahead_and_behind():
-    assert Navigator.project_target((0, 0), (1, 0), 100) == (100, 0)
-    assert Navigator.project_target((0, 0), (1, 0), -5) is None
-
-
 def test_steering_uses_angle_not_metres(nav):
     nav.heading = (1.0, 0.0)
     # 5 degrees off at 20m: sin(5°)=0.087 < 0.15 deadband -> straight.
@@ -67,6 +62,18 @@ def test_steering_uses_angle_not_metres(nav):
     assert nav.steer_toward((0, 0), x, z) == 1
 
 
+def test_target_behind_keeps_turning_one_way(nav):
+    """Sim failure: left/right/left taps for a target behind = drove 700 m the wrong way."""
+    nav.heading = (1.0, 0.0)
+    first = nav.steer_toward((0, 0), -100, 1)
+    assert first != 0
+    assert nav.steer_toward((0, 0), -100, -1) == first     # wobble across the line: same side
+    nav.heading = (0.0, 1.0)
+    nav.steer_toward((0, 0), -100, 0)
+    nav.heading = (-1.0, 0.0)                               # turned round
+    assert nav.steer_toward((0, 0), -100, 0) == 0
+
+
 def _drive(nav, start, heading, n, step=2.0):
     x, z = start
     for _ in range(n):
@@ -75,36 +82,62 @@ def _drive(nav, start, heading, n, step=2.0):
     return x, z
 
 
-def test_first_estimate_starts_planner(nav):
-    pos = _drive(nav, (0, 0), (1, 0), 4)
-    assert nav.heading_stable()
-    nav.try_estimate_target(pos, 200, "N", dstar_straight=True)      # sets p1
-    pos = _drive(nav, pos, (1, 0), 3)
-    nav.try_estimate_target(pos, 194, "N", dstar_straight=True)
+def _arrow(pos, heading, target):
+    """HUD arrow, clockwise from facing (measured SWG convention)."""
+    b = math.atan2(target[1] - pos[1], target[0] - pos[0])
+    rel = (math.atan2(heading[1], heading[0]) - b) % (2 * math.pi)
+    return ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][int((math.degrees(rel) + 22.5) // 45) % 8]
+
+
+def _observe_drive(nav, target, start, heading, metres, turn_deg_per_m=0.0):
+    x, z = start
+    yaw = math.atan2(heading[1], heading[0])
+    for _ in range(int(metres / 2)):
+        yaw += math.radians(turn_deg_per_m) * 2
+        x, z = x + 2 * math.cos(yaw), z + 2 * math.sin(yaw)
+        nav.update_heading((x, z))
+        d = int(math.hypot(target[0] - x, target[1] - z))
+        nav.observe_target((x, z), d, _arrow((x, z), (math.cos(yaw), math.sin(yaw)), target))
+    return x, z
+
+
+def test_far_target_found_from_distances_not_one_arrow_reading(nav):
+    """
+    Marc's first real drive: target 2.9 km away, 15° off the arrow's centre.
+    v0.20 projected the target once along the heading (~750 m sideways out)
+    and D* drove there. Readings along a curve must pin it down.
+    """
+    target = (2900.0, 0.0)
+    _observe_drive(nav, target, (0, 0), (math.cos(math.radians(40)), math.sin(math.radians(40))),
+                   600, turn_deg_per_m=-0.1)
     assert nav.est_locked and nav.r.planner_active
-    assert nav.target_wx == pytest.approx(pos[0] + 194)
+    err = math.hypot(nav.target_wx - target[0], nav.target_wz - target[1])
+    assert err < 100, err
+    gx, gz = nav._goal_xy
+    assert math.hypot(gx - target[0], gz - target[1]) < 150
 
 
-def test_refresh_with_active_planner_does_not_crash_and_moves_goal(nav):
-    """The original f-string crashed exactly here."""
-    pos = _drive(nav, (0, 0), (1, 0), 4)
-    nav.try_estimate_target(pos, 200, "N", True)
-    pos = _drive(nav, pos, (1, 0), 3)
-    nav.try_estimate_target(pos, 194, "N", True)
-    old_goal = nav.r.planner.goal
-    # distance drifts > 50m -> refresh allowed
-    nav.try_estimate_target(pos, 300, "N", True)
-    pos = _drive(nav, pos, (1, 0), 6)
-    nav.try_estimate_target(pos, 290, "N", True)
-    assert nav.r.planner.goal != old_goal
+def test_no_d_star_goal_until_confident(nav):
+    """Driving straight at it, sideways position is unknown: follow the arrow, no D* goal."""
+    _observe_drive(nav, (2900.0, 0.0), (0, 0), (1.0, 0.0), 100)
+    assert not nav.est_locked and not nav.r.planner_active
+    assert nav.target_wx is not None          # still a best guess for recalibration
+
+
+def test_goal_moves_when_estimate_improves(nav):
+    target = (300.0, 100.0)
+    pos = _observe_drive(nav, target, (0, 0), (1.0, 0.0), 100)
+    first = nav._goal_xy
+    assert first is not None
+    _observe_drive(nav, target, pos, (0.0, 1.0), 60)        # sideways: better geometry
+    assert math.hypot(nav._goal_xy[0] - target[0], nav._goal_xy[1] - target[1]) < 30
     assert nav.r.planner.has_path()
 
 
-def test_estimate_ignored_unless_arrow_north(nav):
-    pos = _drive(nav, (0, 0), (1, 0), 6)
-    nav.try_estimate_target(pos, 100, "NE", True)
-    nav.try_estimate_target(pos, 100, "NE", True)
-    assert not nav.est_locked
+def test_arrow_fallback_turns_round_when_target_behind(nav):
+    assert nav.tick((0, 0), 1.0, "S", 100) != 0
+    assert nav.tick((0, 0), 1.0, "SE", 100) == 1
+    assert nav.tick((0, 0), 1.0, "SW", 100) == -1
 
 
 def test_enter_recal_without_position_does_not_crash(nav):
@@ -171,7 +204,7 @@ def test_stuck_twice_same_place_on_vehicle_dismounts(nav):
     nav.r.mounted = True
     nav.heading = (1.0, 0.0)
     assert nav._enter_recal((100, 100)) == "STOP"           # first time: recalibrate
-    assert nav.r.db.get_state("naboo", 105, 100) != BLOCKED  # ...without marking a wall
+    assert nav.r.db.get_state("naboo", 101, 100) != BLOCKED  # ...without marking a wall
     assert nav._enter_recal((105, 102)) == "DISMOUNT"        # second time within 15m
 
 
@@ -187,4 +220,4 @@ def test_on_foot_never_dismounts_and_maps(nav):
     nav.heading = (1.0, 0.0)
     for _ in range(3):
         assert nav._enter_recal((100, 100)) == "STOP"
-    assert nav.r.db.get_state("naboo", 105, 100) == BLOCKED  # cell ahead marked
+    assert nav.r.db.get_state("naboo", 101, 100) == BLOCKED  # cell just ahead marked

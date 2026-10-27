@@ -1,3 +1,4 @@
+import math
 import heapq
 
 import pytest
@@ -82,8 +83,30 @@ def test_km_uses_last_update_position(db):
     pl.initialise()
     pl.update_start(5.0, 0.0)     # one cell
     pl.update_start(10.0, 0.0)    # one more cell
-    # Paper: km = h(s0,s1) + h(s1,s2) = 5 + 5
-    assert pl._km == pytest.approx(10.0)
+    # Paper: km = h(s0,s1) + h(s1,s2); h is cost_clear per cell (admissible)
+    assert pl._km == pytest.approx(2 * pl.h_per_cell)
+
+
+def test_heuristic_never_overestimates(db):
+    """The old heuristic was 5 per cell against an edge cost of 1-3: it overestimated."""
+    pl = DStarLite(db, P)
+    pl.set_goal(200.0, 0.0)
+    pl.set_start(0.0, 0.0)
+    pl.initialise()
+    assert pl.path_cost() >= pl._calculate_key(pl._start)[0] - pl._km - 1e-6
+
+
+def test_path_next_to_a_wall_does_not_loop(db):
+    """Simulator failure: with the old heuristic the path read back from D* went in a circle."""
+    pl = DStarLite(db, P)
+    pl.set_goal(400.0, 0.0)
+    pl.set_start(120.0, 40.0)
+    pl.initialise()
+    for z in range(-60, 61, 5):                 # a 120 m wall at x = 140..150
+        pl.update_cell(142.5, z + 2.5, BLOCKED)
+    path = pl.get_planned_path(400)
+    assert len(set(path)) == len(path)
+    assert math.hypot(path[-1][0] - 400, path[-1][1]) < 10
 
 
 def test_note_cell_reaches_planner_cache(db):

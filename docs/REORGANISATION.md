@@ -98,6 +98,16 @@ Each one was confirmed against the original code before fixing, and is covered b
 | 12 | Command file written in place, so the controller could read half a file | Status review | Atomic write + retry |
 | 13 | `nav_state.json` was relative, so both scripts needed the same working directory | Status review | Now a config path |
 | 14 | Stale 1 m sub-cells: blocking a cell creates 1 m sub-cells around it, and a neighbour blocked or cleared later kept its old sub-cells. `get_state()` prefers 1 m data | Block (132,12) then (142,12): `get_state` returns unexplored, and still does after marking it clear | **Any cell within about 10 m of an earlier obstacle ignored every later mark.** Recalibration retried the same blocked cell forever while D\* (which reads 5 m cells) thought it was blocked. Probably the review's "bad CLEAR marking" |
+| 15 | **Target estimate from one arrow reading.** When the arrow first read N, the target was projected once along the heading: `target = position + heading × distance` | First in-game drive (27 Oct): swoop, waypoint 2,882 m away, D\* drove away from it. Simulator: 3 km targets ended 408–631 m out and never arrived | N means "within ±22.5°", which at 3 km is up to ±1,100 m sideways. It was never refreshed, because the arrow then stopped reading N. **Fix:** `target_estimator.py` trilaterates from a reading every 5 m (the distance is exact to the metre; the arrow only says which sector). D\* follows the estimate once it is pinned down; before that the bot follows the arrow. Simulator: 3 km targets now arrive, estimate within 8–25 m |
+| 16 | D\* heuristic in metres (5 per cell) but edge costs per cell (1 or 3) | Path read back from D\* next to a wall went in a circle | It overestimated, so the search stopped before the cells round the bot were settled. Bot orbited one spot for minutes. Now cost_clear per cell (admissible); D\* plans at most 300 m ahead (a "carrot") to stay fast |
+| 17 | Target behind: steering tapped left/right/left as the cross product's sign flipped | Simulator: drove 700 m the wrong way after a recalibration | Now picks a side and keeps turning |
+| 18 | Arrow fallback returned 0 (straight on) for S, SE and SW | Code | Drove away from a target behind it |
+| 19 | Steered at D\*'s next cell, 5 m away, which a vehicle passes before the next tick | Simulator | Steers 3 cells ahead |
+| 20 | `attempt_cell` drove for a fixed 3–4 s, and counted 1.5 m of movement in **any** direction as reaching the cell, then marked it CLEAR | Simulator: wall cells marked clear 50+ times as the bot slid along the wall | Stops at the cell; CLEAR only if it got there; BLOCKED only if pushing got it nowhere; reverses into cells behind instead of turning blind (which spiralled 12 m round a 5 m cell) |
+| 21 | When stuck, the cell **5 m** ahead was marked BLOCKED | Simulator | Pressed against a wall, the bot is often already reported inside the wall's cell, so the real obstacle was never marked. Now the point 1 m ahead |
+| 22 | Grinding along a wall at an angle never counted as stopped (speed stays above 10%) | Simulator with wall sliding | New check: less than 8 m covered in 6 s = stuck. The cells beside the slide are marked blocked (on foot) |
+| 23 | The kill key was only read once per tick (~2 s with vision), so a quick tap of F8 was missed | First in-game drive | A background thread watches it every 20 ms and remembers the press |
+| 24 | The simulator let the bot tunnel through a 10 m wall (one big step per key event), and stopped it dead at walls instead of sliding | — | **The old wall test passed for the wrong reason.** With that fixed, v0.20 logic fails every wall case; the current code gets round a 120 m wall (3/3) but a 300 m wall is still too slow (1/3 in 15 min). See known issues |
 
 ## Behaviour changes to know about
 
@@ -137,19 +147,19 @@ I couldn't verify SWG's handedness from here, so it's now a setting
 - **How it dismounts:** by default it types `/dismount` in chat (Enter, text, Enter). Alternatively, set `dismount_method: key` and `dismount_key` to a toolbar key. The controller has a new `TYPE` command for this.
 - **`mounted_mapping`:** `clear_only` (the default), `none` (nothing while mounted), or `all` (the old behaviour, for comparison).
 
-The simulator can't judge this rule yet. It models coordinate lag but not vehicle momentum (starting and stopping distance, sliding along walls), which is the reason for the rule. Adding momentum would make it useful for tuning `dismount_after_stuck` and `stuck_radius_m`.
+The simulator can't fully judge this rule yet. It models coordinate lag and sliding along walls, but not vehicle momentum (starting and stopping distance), which is the main reason for the rule. Adding momentum would make it useful for tuning `dismount_after_stuck` and `stuck_radius_m`.
 
 ## Known issues (not changed: they need in-game testing)
 
-- **The align loop can't work while stationary.** `align_to_direction` waits
-  for the heading to change, but the heading only updates after 1 m of
-  movement, and the loop only turns. It usually runs to its 3 s timeout.
-- **Cell attempts overshoot.** `attempt_cell` drives forward for a fixed 3–4 s
-  whatever the distance. On a swoop that's 48–64 m for a 5–20 m target, so
-  every probe ends deep in unmapped ground. In the simulator a 400 m trip past
-  a wall took **2–3 km of driving**, and a 400 m long wall wasn't solved in
-  15 minutes. This is the strongest lead for the city looping. Stop on
-  distance, or at least scale the duration by vehicle speed.
+- **Long walls are slow.** D\* assumes unknown ground is open, so after each
+  contact it plans "through" the wall a little further along. On foot that's
+  about 20 s per 5 m of wall: a 120 m wall takes 3–13 minutes in the
+  simulator, and a 300 m wall usually more than 15. Ideas: follow the wall
+  (pick a side and keep it) instead of replanning on every contact, or turn
+  the slide track into a wall line.
+- **Turning on foot is blind.** The heading comes from movement, so turning to
+  a cell beside the bot needs short forward pulses. A measured turn rate per
+  vehicle would let it turn on the spot.
 - **Stops are assumed to be walls.** `_enter_recal` marks the cell ahead
   BLOCKED whatever caused the stop (lag, a creature, a menu).
 - **`cost_unexplored`.** The code review called 3.0 a bug. The simulator

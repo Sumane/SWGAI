@@ -83,6 +83,16 @@ navigation:
   stop_speed_ratio: 0.10        # below this fraction of max speed = stopped
   stop_debounce: 3              # consecutive stopped ticks before recalibrating
   steer_deadband: 0.15          # sin(angle) below which the bot drives straight
+  steer_lookahead_cells: 3      # steer at a point this many cells along the D* path, not the next cell
+  grind_window_s: 6.0           # moving but covered less than grind_min_m in this long = stuck
+  grind_min_m: 8.0              #   (the game slides you along walls, so speed alone misses it)
+
+  # Target estimate: trilateration from (position, distance) readings every few metres
+  estimate_spacing_m: 5.0       # take a reading every this many metres
+  estimate_dist_sigma_m: 3.0    # distance noise (integer metres + mounted coordinate lag)
+  estimate_confident_m: 25.0    # D* follows the estimate once it's this sure (or 4% of the range)
+  goal_move_m: 20.0             # move the D* goal when the estimate shifts more than this (or 2%)
+  dstar_horizon_m: 300.0        # far targets: D* plans to a point this far along the way
   # Which way the RIGHT key turns the heading in X/Z coordinates.
   #  -1 = RIGHT turns clockwise (X = east, Z = north). MEASURED in-game 27 Oct 2026
   #       with scripts/check_turn_direction.py: 3/3 trials.
@@ -109,6 +119,7 @@ planner:
   # this caused backward routing, but in the simulator (tests/test_simulated_drive.py)
   # 1.0 was clearly worse: it failed walls that 3.0 got round. Keep 3.0.
   cost_unexplored: 3.0
+  cost_near_blocked: 10.0       # unexplored cell next to a known blocked one (walls are long)
   search_radius_m: 300.0
   goal_reach_m: 8.0
 

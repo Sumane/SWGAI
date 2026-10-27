@@ -46,11 +46,22 @@ GOAL_REACH_M = 8.0
 
 
 def _heuristic(cx1: int, cz1: int, cx2: int, cz2: int,
-               resolution: int = RES_NORMAL) -> float:
-    """Octile distance heuristic — better than Euclidean for 8-connected grid."""
+               per_cell: float = 1.0) -> float:
+    """
+    Octile distance in CELLS times the cost per cell.
+
+    FIX: this used to multiply by the grid resolution (5 m), while edge costs
+    are 1 (clear) or 3 (unexplored) per cell. The heuristic then overestimated
+    every step, D* stopped searching before the cells round the bot were
+    settled, and the path read back from them could go round in a circle: in
+    the simulator the bot orbited a spot next to a wall for minutes.
+    Now it is cost_clear per cell, the cheapest possible step, so it never
+    overestimates. That searches more cells, so the navigator keeps the D*
+    goal within ~300 m (a "carrot" on the way to a far target).
+    """
     dx = abs(cx1 - cx2)
     dz = abs(cz1 - cz2)
-    return resolution * (dx + dz + (math.sqrt(2) - 2) * min(dx, dz))
+    return per_cell * (dx + dz + (math.sqrt(2) - 2) * min(dx, dz))
 
 
 class DStarLite:
@@ -78,7 +89,8 @@ class DStarLite:
                  cost_clear: float = COST_CLEAR,
                  cost_unexplored: float = COST_UNEXPLORED,
                  search_radius_m: float = SEARCH_RADIUS_M,
-                 goal_reach_m: float = GOAL_REACH_M):
+                 goal_reach_m: float = GOAL_REACH_M,
+                 cost_near_blocked: float = 10.0):
         self.db         = db
         self.planet     = planet
         self.resolution = resolution
@@ -86,6 +98,8 @@ class DStarLite:
         self.cost_unexplored = cost_unexplored
         self.search_radius_m = search_radius_m
         self.goal_reach_m    = goal_reach_m
+        self.h_per_cell      = cost_clear     # admissible: never more than a real step costs
+        self.cost_near_blocked = cost_near_blocked
         self._dirty = False   # vertices changed but path not recomputed yet
 
         self._g    = {}   # g[node]  = cost from node to goal
@@ -190,7 +204,7 @@ class DStarLite:
     def _calculate_key(self, node):
         g_rhs_min = min(self._g_val(node), self._rhs_val(node))
         h = _heuristic(self._start[0], self._start[1],
-                       node[0], node[1], self.resolution)
+                       node[0], node[1], self.h_per_cell)
         return (g_rhs_min + h + self._km, g_rhs_min)
 
     def _neighbours(self, node):
@@ -212,12 +226,24 @@ class DStarLite:
             return self.cost_unexplored
         return COST_BLOCKED
 
+    def _next_to_blocked(self, node) -> bool:
+        cx, cz = node
+        st = self._cell_states
+        return (st.get((cx + 1, cz)) == BLOCKED or st.get((cx - 1, cz)) == BLOCKED or
+                st.get((cx, cz + 1)) == BLOCKED or st.get((cx, cz - 1)) == BLOCKED)
+
     def _edge_cost(self, from_node, to_node) -> float:
         """Cost to move from from_node to to_node."""
         to_state = self._state(to_node)
         base = self._cost(to_state)
         if base == float('inf'):
             return float('inf')
+        # Walls are longer than one cell. An unexplored cell right next to a
+        # known blocked one is probably more wall, so make it dearer. Without
+        # this the plan went "through" the wall one cell further along after
+        # every contact, and a 300 m wall took 15+ minutes to get round.
+        if to_state == UNEXPLORED and self.cost_near_blocked > base and self._next_to_blocked(to_node):
+            base = self.cost_near_blocked
         # Diagonal movement costs sqrt(2) more
         if from_node[0] != to_node[0] and from_node[1] != to_node[1]:
             return base * math.sqrt(2)
@@ -303,7 +329,7 @@ class DStarLite:
         # Paper: km += h(s_last, s_start); s_last = s_start
         if self._last_start is not None:
             self._km += _heuristic(self._last_start[0], self._last_start[1],
-                                    new_start[0], new_start[1], self.resolution)
+                                    new_start[0], new_start[1], self.h_per_cell)
         self._last_start = new_start
         self._start = new_start
         self._compute_shortest_path()
@@ -321,10 +347,14 @@ class DStarLite:
         self._cell_states[node] = new_state
         if self._goal is None or self._start is None:
             return
-        self._update_vertex(node)
-        for nb in self._neighbours(node):
-            self._update_vertex(nb)
+        self._update_around(node)
         self._dirty = True
+
+    def _update_around(self, node, r: int = 2):
+        cx, cz = node
+        for dx in range(-r, r + 1):
+            for dz in range(-r, r + 1):
+                self._update_vertex((cx + dx, cz + dz))
 
     def update_cell(self, wx: float, wz: float, new_state: int):
         """
@@ -347,10 +377,9 @@ class DStarLite:
         elif new_state == CLEAR:
             self.db.mark_clear(self.planet, wx, wz, self.resolution)
 
-        # Replan — update the changed node and its neighbours
-        self._update_vertex(node)
-        for nb in self._neighbours(node):
-            self._update_vertex(nb)
+        # Replan: the changed node's own cost and (via cost_near_blocked) its
+        # neighbours' costs changed, so update everything within 2 cells
+        self._update_around(node)
         self._compute_shortest_path()
 
         print(f"[D*] Cell updated ({wx:.0f},{wz:.0f}) "

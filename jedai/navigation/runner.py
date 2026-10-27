@@ -50,7 +50,8 @@ class NavigationRunner:
                                  cost_clear=p["cost_clear"],
                                  cost_unexplored=p["cost_unexplored"],
                                  search_radius_m=p["search_radius_m"],
-                                 goal_reach_m=p["goal_reach_m"])
+                                 goal_reach_m=p["goal_reach_m"],
+                                 cost_near_blocked=p.get("cost_near_blocked", 10.0))
         self.planner_active = False
         self.navigator = Navigator(self, self.cfg)
 

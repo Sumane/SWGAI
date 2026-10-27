@@ -139,11 +139,67 @@ def make_input(settings):
     raise ValueError(f"Unknown platform.input_backend: {name}")
 
 
-def make_key_state(settings):
+class LatchedKeyState:
+    """
+    Watches some keys on a background thread (every 20 ms) and remembers a
+    press until it is read. FIX: the navigator only checks the kill key once a
+    tick, and a tick takes ~2 s while it reads the HUD, so a quick tap of F8
+    was usually missed.
+    """
+
+    def __init__(self, make_inner, keys, poll_s: float = 0.02):
+        import threading
+
+        self._make_inner = make_inner
+        self._keys = [k for k in keys if k]
+        self._poll = poll_s
+        self._seen = set()
+        self._lock = threading.Lock()
+        self._inner = None
+        self._ready = threading.Event()
+        self._thread = threading.Thread(target=self._run, name="key-latch", daemon=True)
+        self._thread.start()
+        self._ready.wait(2.0)
+
+    def _run(self):
+        import time
+
+        try:
+            self._inner = self._make_inner()   # X connections aren't shared across threads
+        finally:
+            self._ready.set()
+        while True:
+            for k in self._keys:
+                try:
+                    if self._inner.is_pressed(k):
+                        with self._lock:
+                            self._seen.add(k)
+                except Exception:
+                    pass
+            time.sleep(self._poll)
+
+    def is_pressed(self, key: str) -> bool:
+        with self._lock:
+            if key in self._seen:
+                self._seen.discard(key)
+                return True
+        return False
+
+
+def make_key_state(settings, latch_keys=None):
+    """
+    Key state reader. With latch_keys, those keys are watched on a background
+    thread so a short press between two checks still counts.
+    """
     if backend_name(settings) == "pydirectinput":
         import keyboard
-        return keyboard
-    return XKeyState(x_display_name(settings))
+        inner = lambda: keyboard
+    else:
+        name = x_display_name(settings)
+        inner = lambda: XKeyState(name)
+    if latch_keys:
+        return LatchedKeyState(inner, latch_keys)
+    return inner()
 
 
 def capture_display(settings) -> str | None:

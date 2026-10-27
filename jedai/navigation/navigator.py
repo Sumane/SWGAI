@@ -9,13 +9,18 @@ States:
                   All fail -> the runner does an explore sweep.
   EXPLORING     — Cross exploration, run once at startup by the runner.
 
-Target estimation:
-  The arrow is a RELATIVE bearing. While arrow == N, the target is straight
-  ahead along the bot's world-space heading (from position deltas), so
-      target = position + heading * distance.
+Target estimation (target_estimator.py):
+  Every few metres the bot records (position, waypoint distance, arrow). The
+  distances are circles round the target; as the bot moves they intersect at
+  it. The arrow only says which 45° sector the target is in. The estimate is
+  refined on every reading and D* is pointed at it once the geometry pins it
+  down (estimator.confident()). Before that the bot follows the arrow.
 
-The panel arrow is used only for the initial align, target estimation, and
-as a steering fallback before D* has a path. It never fights D*.
+  FIX: v0.20 projected   target = position + heading * distance   once, when
+  the arrow first read N. N means anywhere within ±22.5°, which at 3 km is up
+  to ±1100 m sideways, and the estimate was never refreshed because the arrow
+  then stopped reading N. D* drove to that wrong point: "navigating away from
+  the target".
 
 Mounted vs on foot:
   CLEAR is recorded whether mounted or not: a cell the bot drove through is
@@ -39,6 +44,7 @@ import time
 from collections import deque
 
 from .grid_db import BLOCKED, CLEAR
+from .target_estimator import TargetEstimator
 
 
 class Navigator:
@@ -62,16 +68,19 @@ class Navigator:
         # Target estimate
         self.target_wx = None
         self.target_wz = None
-        self.est_locked = False
-        self._est_p1 = None
-        self._est_travel = 0.0
+        self.est_locked = False          # True once D* has been pointed at a confident estimate
         self._est_dist_at_last = None
+        self.estimator = TargetEstimator(
+            min_spacing_m=float(self.cfg.get("estimate_spacing_m", 5.0)),
+            dist_sigma_m=float(self.cfg.get("estimate_dist_sigma_m", 3.0)),
+            right_turn_sign=int(self.cfg.get("right_turn_sign", -1)))
         # CLEAR interpolation
         self._last_mark_pos = None
         self._last_mark_time = 0.0
         self._min_speed_since_mark = 999.0
         # Stop debounce
         self._stop_ticks = 0
+        self._pos_hist = deque()
         # Recalibration
         self._recal_candidates = []
         self._recal_visited = set()
@@ -87,6 +96,7 @@ class Navigator:
         """Back on foot: start recalibration afresh, now with mapping."""
         self.state = self.MOVING
         self._stop_ticks = 0
+        self._pos_hist = deque()
         self._recal_candidates = []
         self._recal_visited = set()
         self._recal_origin = None
@@ -95,12 +105,10 @@ class Navigator:
         self._min_speed_since_mark = 999.0
 
     def reset_estimator(self):
-        """After a confirmed align to N: clear heading/accumulation, keep the estimate."""
+        """After a re-align: clear the heading (it's stale). The target readings stay valid."""
         self._prev_pos = None
         self._heading_buffer = deque(maxlen=5)
         self.heading = None
-        self._est_p1 = None
-        self._est_travel = 0.0
 
     # ------------------------------------------------------------------
     # Grid marking
@@ -179,11 +187,40 @@ class Navigator:
                 return None
         return tx, tz
 
+    _goal_xy = None
+
+    _carrot = None
+
+    def _dstar_goal(self, tx, tz, pos):
+        """
+        The target itself if it's within dstar_horizon_m, otherwise a point that
+        far along the straight line to it (a carrot). Keeps D* fast in Python;
+        the carrot moves on as the bot gets near it.
+        """
+        horizon = float(self.cfg.get("dstar_horizon_m", 300.0))
+        dx, dz = tx - pos[0], tz - pos[1]
+        d = math.hypot(dx, dz)
+        if d <= horizon or d == 0:
+            return tx, tz, False
+        return pos[0] + dx / d * horizon, pos[1] + dz / d * horizon, True
+
+    def _advance_carrot(self, pos):
+        """Move the carrot on once the bot is halfway to it."""
+        if self._carrot is None or pos is None or self._goal_xy is None:
+            return
+        horizon = float(self.cfg.get("dstar_horizon_m", 300.0))
+        if math.hypot(self._carrot[0] - pos[0], self._carrot[1] - pos[1]) < horizon / 2:
+            self._set_target(self._goal_xy[0], self._goal_xy[1], self._est_dist_at_last, pos)
+
     def _set_target(self, tx, tz, dist, start_pos):
-        """Lock a new target estimate and point D* at it."""
+        """Point D* at a target estimate (or at a carrot on the way to it)."""
         self.target_wx, self.target_wz = tx, tz
+        self._goal_xy = (tx, tz)
         self._est_dist_at_last = dist
         self.est_locked = True
+        gx, gz, is_carrot = self._dstar_goal(tx, tz, start_pos)
+        self._carrot = (gx, gz) if is_carrot else None
+        tx, tz = gx, gz
         if self.r.planner_active:
             # FIX: D* Lite's g/rhs values are distances to the goal, so moving
             # the goal on a live planner left it routing to the old target.
@@ -204,48 +241,42 @@ class Navigator:
             except Exception as e:
                 print(f"\n[D*] Init failed: {e}")
 
-    def try_estimate_target(self, pos, dist, arrow, dstar_straight):
+    def observe_target(self, pos, dist, arrow=None, force_goal=False):
         """
-        Re-estimate the target only when: arrow == N, D* routes straight,
-        heading is stable, and we've travelled 3m (first estimate) or 10m
-        (refresh). Once locked, only refresh if the distance drifted > 50m.
+        Feed one reading to the estimator and, when it has moved enough, move
+        the D* goal to the new estimate.
+
+        The arrow is only used while the heading is trustworthy (it is relative
+        to the way the bot faces). The goal moves when the estimate is confident,
+        or always with force_goal (e.g. the bot is stuck and needs some goal).
+        Returns True if the D* goal was (re)set.
         """
         if pos is None or dist is None:
-            return
-        if arrow != "N" or not dstar_straight or not self.heading_stable():
-            self._est_p1 = None
-            self._est_travel = 0.0
-            return
+            return False
+        use_arrow = arrow if (self.heading is not None and self.heading_stable()) else None
+        if not self.estimator.add(pos, dist, use_arrow, self.heading):
+            return False
+        est = self.estimator.solve()
+        if est is None:
+            return False
+        self.target_wx, self.target_wz = est
+        if not (force_goal or self.estimator.confident(self._confident_sigma(dist))):
+            return False
+        goal_ok = self.r.planner_active and self.r.planner.goal is not None
+        if goal_ok and self._goal_xy is not None:
+            moved = math.hypot(est[0] - self._goal_xy[0], est[1] - self._goal_xy[1])
+            if moved < max(float(self.cfg.get("goal_move_m", 20.0)), 0.02 * dist):
+                return False
+        old = self._goal_xy
+        self._set_target(est[0], est[1], dist, pos)
+        old_s = f"({old[0]:.0f},{old[1]:.0f})" if old is not None else "(none)"
+        print(f"\n[EST] Target {old_s} -> ({est[0]:.0f},{est[1]:.0f}) "
+              f"±{self.estimator.sigma_m:.0f}m dist={dist}m readings={len(self.estimator.readings)}")
+        return True
 
-        if self.est_locked and (self._est_dist_at_last is None or
-                                abs(dist - self._est_dist_at_last) < 50):
-            return
-
-        if self._est_p1 is None:
-            self._est_p1 = pos
-            self._est_travel = 0.0
-            return
-        self._est_travel = math.hypot(pos[0] - self._est_p1[0], pos[1] - self._est_p1[1])
-        if self._est_travel < (3.0 if not self.est_locked else 10.0):
-            return
-
-        target = self.project_target(pos, self.heading, dist)
-        if target is None:
-            print("\n[EST] Rejected — target behind heading")
-            self._est_p1 = pos
-            self._est_travel = 0.0
-            return
-
-        old = (self.target_wx, self.target_wz)
-        was_active = self.r.planner_active
-        self._est_p1 = None
-        self._est_travel = 0.0
-        self._set_target(target[0], target[1], dist, pos)
-        if was_active:
-            # FIX: the original f-string here used an invalid format spec and
-            # crashed the navigator the first time a refresh happened.
-            old_s = (f"({old[0]:.0f},{old[1]:.0f})" if old[0] is not None else "(?,?)")
-            print(f"\n[EST] Target: {old_s} → ({target[0]:.0f},{target[1]:.0f}) dist={dist}m")
+    def _confident_sigma(self, dist):
+        """How sure we must be before D* follows the estimate: 25 m, or 4% of the range far away."""
+        return max(float(self.cfg.get("estimate_confident_m", 25.0)), 0.04 * dist)
 
     # ------------------------------------------------------------------
     # CLEAR interpolation
@@ -294,6 +325,24 @@ class Navigator:
             return True
         return self.heading[0] * (dx / mag) + self.heading[1] * (dz / mag) > 0.94
 
+    def lookahead_waypoint(self):
+        """
+        A point a few cells along the D* path, not just the next cell.
+        FIX: the next cell is only 5 m away; at vehicle speed the bot is past it
+        before the next tick, so steering chased a point that kept appearing
+        just behind it.
+        """
+        n = int(self.cfg.get("steer_lookahead_cells", 3))
+        path = self.r.planner.get_planned_path(max_steps=n + 1)
+        if len(path) > 1:
+            return path[min(n, len(path) - 1)]
+        return self.r.planner.next_waypoint()
+
+    _behind_turn = 0
+
+    def _cell_of(self, wx, wz):
+        return (int(math.floor(wx / self.cell)), int(math.floor(wz / self.cell)))
+
     def _turn_cross(self, dx, dz):
         """Sign-corrected cross product: > 0 means 'turn RIGHT' (see right_turn_sign)."""
         return self.cfg.get("right_turn_sign", 1) * (self.heading[0] * dz - self.heading[1] * dx)
@@ -309,9 +358,16 @@ class Navigator:
         # FIX: normalise so the deadband is an angle (sin θ), not metres.
         cross = self._turn_cross(dx, dz) / mag
         behind = (self.heading[0] * dx + self.heading[1] * dz) < 0
+        if behind:
+            # FIX: a target behind has cross ≈ 0 and its sign flips with every
+            # wobble, so the bot tapped left, right, left... and drove 700 m the
+            # wrong way in the simulator. Pick a side once and keep turning.
+            if self._behind_turn == 0:
+                self._behind_turn = 1 if cross >= 0 else -1
+            return self._behind_turn
+        self._behind_turn = 0
         if abs(cross) < self.cfg["steer_deadband"]:
-            # FIX: a target straight BEHIND also has cross ≈ 0; turn, don't drive away
-            return (1 if cross >= 0 else -1) if behind else 0
+            return 0
         return 1 if cross > 0 else -1
 
     # ------------------------------------------------------------------
@@ -349,63 +405,125 @@ class Navigator:
 
     def attempt_cell(self, pos, wx, wz, duration=None):
         """
-        Align toward (wx, wz), drive forward for `duration` seconds and check
-        progress. >= 1.5m moved -> CLEAR (and seeds heading), else BLOCKED.
-        Returns (success, final_pos).
+        Drive to (wx, wz), steering on the way, for up to `duration` seconds.
+        Got there, or got clearly closer -> CLEAR (and seeds heading); otherwise
+        the cell is marked BLOCKED (on foot). Returns (success, final_pos).
+
+        FIX: this used to turn on the spot first (align_to_direction), but the
+        heading only updates when the bot moves, so the turn ran blind until it
+        timed out and the bot then drove off in whatever direction it faced.
+        Now it holds FORWARD and steers, so the heading keeps updating.
         """
         duration = self.cfg["recal_attempt_secs"] if duration is None else duration
         if pos is None:
             return False, pos
-        dx, dz = wx - pos[0], wz - pos[1]
-        d = math.hypot(dx, dz)
+        d = math.hypot(wx - pos[0], wz - pos[1])
         if d < 0.5:
             return True, pos
 
         keys = self.r.keys
         keys.stop_movement()
         time.sleep(0.2)
-        self.align_to_direction(dx / d, dz / d)
-
         start = self.r.read_position()
         if start is None:
             return False, pos
+        d = math.hypot(wx - start[0], wz - start[1])
+        if self.heading is not None and \
+                (self.heading[0] * (wx - start[0]) + self.heading[1] * (wz - start[1])) < 0:
+            duration += 2.0                       # turning round first takes a while
+        self._prev_pos = start
+        self._behind_turn = 0
 
-        keys.key_down("FORWARD")
+        target_cell = self._cell_of(wx, wz)
+        holding = False
+        mode = None              # None = forward/turning, "back" = reversing
         deadline = time.time() + duration
         final_pos = start
         while time.time() < deadline:
             if self.r.should_stop():
-                keys.key_up("FORWARD")
-                return False, final_pos
+                break
             p = self.r.read_position()
-            if p is not None:
-                final_pos = p
-        keys.key_up("FORWARD")
+            if p is None:
+                continue
+            final_pos = p
+            if mode != "back":
+                self.update_heading(p)
+            left = math.hypot(wx - p[0], wz - p[1])
+            # FIX: stop at the cell instead of holding FORWARD for the full
+            # duration (a 20 m leg became 100 m on a swoop)
+            if left <= max(1.5, 0.2 * d) or (self._cell_of(*p) == target_cell and d - left >= 1.0):
+                break
+            if self.heading is not None and left > 0.5:
+                dot = (self.heading[0] * (wx - p[0]) + self.heading[1] * (wz - p[1])) / left
+                if mode == "back" or (mode is None and dot < -0.5):
+                    # Cell (mostly) behind: reverse into it rather than turning
+                    # round. Turning on foot means a forward pulse for every
+                    # 30° to see the new heading, which spiralled 12 m round a 5 m cell.
+                    if mode != "back":
+                        if holding:
+                            keys.key_up("FORWARD"); holding = False
+                        keys.key_down("BACK"); mode = "back"
+                    if dot > -0.2:            # no longer behind us: stop reversing
+                        break
+                    continue
+                if dot < 0.64:
+                    # More than ~50° off: turn with FORWARD released, then a short
+                    # forward pulse so the heading (from movement) updates. Holding
+                    # FORWARD while turning drove a 10 m circle round a 5 m cell.
+                    if holding:
+                        keys.key_up("FORWARD"); holding = False
+                    turn = 1 if self._turn_cross(wx - p[0], wz - p[1]) >= 0 else -1
+                    keys.tap("RIGHT" if turn > 0 else "LEFT", 0.25)
+                    keys.tap("FORWARD", 0.15)
+                    continue
+            if not holding:
+                keys.key_down("FORWARD"); holding = True
+            turn = self.steer_toward(p, wx, wz)
+            if turn:
+                keys.tap("RIGHT" if turn > 0 else "LEFT", 0.1)
+        if holding:
+            keys.key_up("FORWARD")
+        if mode == "back":
+            keys.key_up("BACK")
 
         progress = math.hypot(final_pos[0] - start[0], final_pos[1] - start[1])
+        # FIX: success used to be "moved 1.5 m in any direction", and the target
+        # cell was then stamped CLEAR. Sliding along a wall counted, so cells
+        # INSIDE the wall were marked clear again and again, and the bot never
+        # learnt the wall. Now it must have got closer, and the cell is only
+        # marked CLEAR if the bot actually got there.
+        left = math.hypot(wx - final_pos[0], wz - final_pos[1])
+        # in the cell AND actually moved towards it (a bot pressed against a wall
+        # can already be reported inside the wall's 5 m cell)
+        reached = self._cell_of(*final_pos) == target_cell and d - left >= 1.0
+        closer = d - left >= max(1.5, 0.5 * d)
         tag = " (mounted: not mapped)" if self.mounted else ""
-        if progress >= 1.5:
+        if reached or closer:
             self.mark(final_pos[0], final_pos[1], CLEAR)
-            if self.r.planner_active:
+            if self.r.planner_active and reached:
                 self.mark(wx, wz, CLEAR, replan_now=True)
             print(f"[CELL] ({wx:.0f},{wz:.0f}) CLEAR (moved {progress:.1f}m){tag}")
-            mv = (final_pos[0] - start[0], final_pos[1] - start[1])
-            mv_mag = math.hypot(*mv)
-            if mv_mag > 0:
-                self._seed_heading((mv[0] / mv_mag, mv[1] / mv_mag))
+            if self.heading is not None:
+                self._seed_heading(self.heading)    # latest facing, from the drive
             return True, final_pos
 
+        if d - left >= 1.0 or progress >= 4.0:
+            # Got closer but didn't get there, or moved about without getting
+            # closer (turning round took too long). Either way it says nothing
+            # about the cell: don't mark it. BLOCKED = pushed and couldn't move.
+            print(f"[CELL] ({wx:.0f},{wz:.0f}) not reached (moved {progress:.1f}m), not marked{tag}")
+            return False, final_pos
         self.mark(wx, wz, BLOCKED, replan_now=True)
         print(f"[CELL] ({wx:.0f},{wz:.0f}) BLOCKED (moved {progress:.1f}m){tag}")
-        return False, pos
+        return False, final_pos
 
     def align_to_direction(self, ndx, ndz, timeout=3.0):
         """
         Rotate until heading matches (ndx, ndz) within 15 degrees.
 
-        KNOWN ISSUE (code review, not changed): the heading only updates when
-        the bot has moved >= 1m, but this loop only turns on the spot, so the
-        heading never changes and the loop usually runs to the timeout.
+        NOT USED any more (attempt_cell steers while driving instead). Kept for
+        reference: the heading only updates when the bot has moved >= 1 m, but
+        this loop only turns on the spot, so it usually ran to the timeout.
         """
         deadline = time.time() + timeout
         keys = self.r.keys
@@ -444,10 +562,14 @@ class Navigator:
             print(f"   Leg {label}: attempting ({wx:.0f},{wz:.0f})")
             success, final = self.attempt_cell(origin_pos, wx, wz, duration=cfg["explore_leg_secs"])
             travelled = math.hypot(final[0] - origin_pos[0], final[1] - origin_pos[1])
+            leg_dist = self.r.read_target_distance()
+            if leg_dist is not None:
+                self.estimator.add(final, leg_dist)     # sideways legs fix the target best
             print(f"   Leg {label}: {'CLEAR' if success else 'BLOCKED'} ({travelled:.1f}m) — returning")
             self.attempt_cell(final, origin_pos[0], origin_pos[1], duration=cfg["explore_leg_secs"])
             return travelled
 
+        origin_dist = self.r.read_target_distance()
         print("   Seeding forward direction...")
         keys.key_down("FORWARD")
         time.sleep(2.0)
@@ -464,12 +586,14 @@ class Navigator:
                 self.mark(seed[0], seed[1], CLEAR)
                 print(f"   Forward direction: ({fwd[0]:.2f},{fwd[1]:.2f})")
                 if seed_dist is not None:
-                    target = self.project_target(seed, fwd, seed_dist)
-                    if target is not None:
-                        self.target_wx, self.target_wz = target
-                        self._est_dist_at_last = seed_dist
-                        self.est_locked = True
-                        print(f"   Initial target estimate: ({target[0]:.0f},{target[1]:.0f}) dist={seed_dist}m")
+                    # first reading (arrow was N after the align); the legs add more
+                    self.estimator.add(origin_pos, origin_dist)
+                    self.estimator.add(seed, seed_dist, "N", fwd)
+                    est = self.estimator.solve()
+                    if est is not None:
+                        self.target_wx, self.target_wz = est
+                        print(f"   First target guess: ({est[0]:.0f},{est[1]:.0f}) dist={seed_dist}m "
+                              f"(±{self.estimator.sigma_m:.0f}m)")
             self.attempt_cell(seed, origin_pos[0], origin_pos[1], duration=cfg["explore_leg_secs"])
         else:
             print("   Seed move failed — heading unknown, using origin")
@@ -490,10 +614,12 @@ class Navigator:
             try_leg("LEFT", *lft)
             try_leg("RIGHT", *rgt)
 
-        if self.target_wx is not None and not self.r.planner_active:
-            p = self.r.read_position()
-            if p is not None:
-                self._set_target(self.target_wx, self.target_wz, self._est_dist_at_last, p)
+        # Only hand D* a goal if the legs pinned the target down; otherwise
+        # follow the arrow and keep collecting readings.
+        p = self.r.read_position()
+        d = self.r.read_target_distance()
+        if p is not None and d is not None:
+            self.observe_target(p, d, None)
 
         print("   Cross exploration complete.")
         return self.target_wx, self.target_wz
@@ -517,7 +643,8 @@ class Navigator:
         if self.r.planner_active and pos is not None:
             self.r.planner.update_start(pos[0], pos[1])
 
-        self.try_estimate_target(pos, dist, arrow, self.dstar_is_straight(pos))
+        self.observe_target(pos, dist, arrow)
+        self._advance_carrot(pos)
 
         if self.state == self.MOVING:
             if speed_pct < self.cfg["stop_speed_ratio"]:
@@ -527,30 +654,94 @@ class Navigator:
                     return self._enter_recal(pos)
             else:
                 self._stop_ticks = 0
+            if self._grinding(pos):
+                print("\n[NAV] Moving but getting nowhere (grinding along a wall?)")
+                self._mark_grind_wall(self._grind_track)
+                return self._enter_recal(pos)
 
             if self.r.planner_active and self.r.planner.has_path():
-                wp = self.r.planner.next_waypoint()
+                wp = self.lookahead_waypoint()
                 if wp is not None:
                     return self.steer_toward(pos, wp[0], wp[1])
 
-            # No D* path yet — panel arrow fallback
-            if arrow in ("NW", "W"):
-                return -1
-            if arrow in ("NE", "E"):
+            # No confident estimate yet: follow the arrow. It's drawn relative to
+            # the screen, so E = target on your right = press RIGHT, whatever the
+            # world axes do. FIX: S/SE/SW used to return 0 = drive straight away.
+            if arrow in ("NE", "E", "SE", "S"):
                 return 1
+            if arrow in ("NW", "W", "SW"):
+                return -1
             return 0
 
         if self.state == self.RECALIBRATING:
             return "RECAL"
         return 0
 
+    def _grinding(self, pos, now=None):
+        """
+        True if the bot has covered less than grind_min_m in the last
+        grind_window_s although it isn't 'stopped'. FIX: pressed against a wall
+        at an angle the game slides the bot along it, so the speed never drops
+        below stop_speed_ratio and the bot ground back and forth for minutes.
+        """
+        if pos is None:
+            return False
+        now = time.time() if now is None else now
+        win = float(self.cfg.get("grind_window_s", 6.0))
+        hist = self._pos_hist
+        hist.append((now, pos))
+        while hist and now - hist[0][0] > win:
+            hist.popleft()
+        if now - hist[0][0] < 0.8 * win:
+            return False
+        span = max(math.hypot(p[0] - hist[0][1][0], p[1] - hist[0][1][1]) for _, p in hist)
+        if span < float(self.cfg.get("grind_min_m", 8.0)):
+            self._grind_track = [p for _, p in hist]
+            hist.clear()
+            return True
+        return False
+
+    def _mark_grind_wall(self, track):
+        """
+        While grinding the bot slid along the obstacle, so the cells just beside
+        that track, on the side it was trying to go, are the obstacle. Marks
+        them all at once (on foot) instead of learning one cell per contact.
+        """
+        if self.mounted or not track or not self.r.planner_active:
+            return
+        (x0, z0), (x1, z1) = track[0], track[-1]
+        lx, lz = x1 - x0, z1 - z0
+        ln = math.hypot(lx, lz)
+        wp = self.lookahead_waypoint()
+        if ln < 1.0 or wp is None:
+            return
+        nx, nz = -lz / ln, lx / ln                      # perpendicular to the slide
+        if nx * (wp[0] - x1) + nz * (wp[1] - z1) < 0:   # towards where it wanted to go
+            nx, nz = -nx, -nz
+        seen = set()
+        for x, z in track:
+            c = self._cell_of(x + nx * 1.0, z + nz * 1.0)
+            if c not in seen and c != self._cell_of(x, z):
+                seen.add(c)
+                self.mark(x + nx * 1.0, z + nz * 1.0, BLOCKED)
+        if seen:
+            print(f"[NAV] Slid along an obstacle: {len(seen)} cells marked blocked")
+
     def _enter_recal(self, pos):
         print("\n[NAV] Stopped — entering RECALIBRATING")
         self.state = self.RECALIBRATING
+        # Stuck before D* had a goal: give it the best estimate we have, so the
+        # recalibration and D* can plan round the obstacle towards it.
+        if not self.r.planner_active and pos is not None and self.target_wx is not None:
+            self._set_target(self.target_wx, self.target_wz, self._est_dist_at_last, pos)
 
         if pos is not None and self.heading is not None:
-            bx = pos[0] + self.heading[0] * self.cell
-            bz = pos[1] + self.heading[1] * self.cell
+            # FIX: the blocked cell is the one just in front of the bot, not one
+            # a whole cell (5 m) ahead: pressed against a wall the bot is often
+            # already reported inside the wall's cell, and marking the cell
+            # beyond it left D* routing through the real obstacle forever.
+            bx = pos[0] + self.heading[0] * 1.0
+            bz = pos[1] + self.heading[1] * 1.0
             self.mark(bx, bz, BLOCKED, replan_now=True)
 
         # FIX: guard pos=None (the original crashed here if coords weren't read)
@@ -590,15 +781,13 @@ class Navigator:
 
         if success:
             self.state = self.MOVING
+            self._pos_hist = deque()
             if self.r.planner_active:
                 self.r.planner.update_start(wx, wz)
-            if not self.est_locked and final_pos is not None and self.heading is not None:
+            if final_pos is not None:
                 fd = self.r.read_target_distance()
                 if fd is not None:
-                    target = self.project_target(final_pos, self.heading, fd)
-                    if target is not None:
-                        self._set_target(target[0], target[1], fd, final_pos)
-                        print(f"[RECAL] Target seeded: ({target[0]:.0f},{target[1]:.0f}) dist={fd}m")
+                    self.observe_target(final_pos, fd, None)
             return True
 
         if not self._recal_candidates:

@@ -14,13 +14,13 @@ _key_state = None
 
 
 def kill_pressed(kill_key: str, settings=None) -> bool:
-    """True while the kill key is held (Windows: keyboard lib; Linux: X key state)."""
+    """True if the kill key was pressed since the last check (watched on a background thread)."""
     global _key_state
     if _key_state is None:
         if settings is None:
             from ..config import settings
         from ..platform_io import make_key_state
-        _key_state = make_key_state(settings)
+        _key_state = make_key_state(settings, latch_keys=[kill_key])
     return _key_state.is_pressed(kill_key)
 
 

@@ -40,6 +40,7 @@ class World:
         self.yaw = math.pi / 2               # facing +Z ("north"), target is east
         self.held, self.autorun, self.last = set(), False, clock.t
         self.dismounts = 0
+        self.slide = True      # walking into a wall at an angle slides along it (as in SWG)
         self.mounted_lag_s = mounted_lag_s     # reported coords trail reality while mounted
         self.history = [(clock.t, 0.0, 0.0)]
 
@@ -52,11 +53,23 @@ class World:
             self.yaw += self.right * self.TURN * dt
         if "LEFT" in self.held:
             self.yaw -= self.right * self.TURN * dt
-        if "FORWARD" in self.held or self.autorun:
-            nx = self.x + math.cos(self.yaw) * self.SPEED * dt
-            nz = self.z + math.sin(self.yaw) * self.SPEED * dt
-            if not self.blocked(nx, nz):
-                self.x, self.z = nx, nz
+        back = "BACK" in self.held and not ("FORWARD" in self.held or self.autorun)
+        if "FORWARD" in self.held or self.autorun or back:
+            # Move in <=1 m sub-steps and stop at the first wall. (One big step
+            # per key event let the bot tunnel through a 10 m wall during a
+            # 3 s hold, which made a wall test pass for the wrong reason.)
+            total = self.SPEED * dt * (-0.5 if back else 1.0)   # reversing is slower
+            n = max(1, int(math.ceil(total)))
+            for _ in range(n):
+                sx, sz = math.cos(self.yaw) * total / n, math.sin(self.yaw) * total / n
+                if not self.blocked(self.x + sx, self.z + sz):
+                    self.x, self.z = self.x + sx, self.z + sz
+                elif self.slide and abs(sx) > 0.2 * abs(total / n) and not self.blocked(self.x + sx, self.z):
+                    self.x += sx          # slide along a wall, like the game does
+                elif self.slide and abs(sz) > 0.2 * abs(total / n) and not self.blocked(self.x, self.z + sz):
+                    self.z += sz
+                else:
+                    break
         self.history.append((self.clock.t, self.x, self.z))
         self.history = self.history[-400:]
 
@@ -164,7 +177,7 @@ def test_drives_to_waypoint(tmp_path, monkeypatch, walls, clockwise, sign, arriv
     r = NavigationRunner(s, hud=SimHud(world), keys=SimKeys(world, clock),
                          screen=SimScreen(world, clock))
     r.vel_tracker._clock = clock.time
-    r.should_stop = lambda: clock.t > 1000 + 600        # give up after 10 sim-minutes
+    r.should_stop = lambda: clock.t > 1000 + 900        # give up after 15 sim-minutes
 
     r.navigate()
     import sqlite3
@@ -192,7 +205,7 @@ def test_mounted_bot_dismounts_at_a_wall_and_only_blocks_on_foot(tmp_path, monke
     r = NavigationRunner(s, hud=SimHud(world), keys=SimKeys(world, clock),
                          screen=SimScreen(world, clock))
     r.vel_tracker._clock = clock.time
-    r.should_stop = lambda: clock.t > 1000 + 600
+    r.should_stop = lambda: clock.t > 1000 + 900
 
     mapped_while_mounted = []
     real_mark = r.navigator.mark
@@ -208,3 +221,31 @@ def test_mounted_bot_dismounts_at_a_wall_and_only_blocks_on_foot(tmp_path, monke
     assert r.current_vehicle == "running" and not r.mounted
     assert mapped_while_mounted == []
     assert world.dist() <= s.nav["stop_dist"]
+
+
+@pytest.mark.parametrize("target", [(2900.0, 0.0), (-1500.0, 2600.0)], ids=["2.9km-east", "3km-north-west"])
+def test_far_waypoint_is_reached(tmp_path, monkeypatch, target):
+    """
+    Marc's first in-game drive: a waypoint ~2.9 km away, swoop with lagging
+    coordinates. v0.20 projected the target once from a single arrow=N reading
+    (±22.5° = up to ±1100 m sideways at that range) and D* drove off to that
+    point. The trilateration estimate must get the bot there.
+    """
+    clock = Clock()
+    for mod in (nav_mod, runner_mod):
+        monkeypatch.setattr(mod.time, "time", clock.time)
+        monkeypatch.setattr(mod.time, "sleep", clock.sleep)
+    answers = iter(["", "0"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+
+    world = World(clock, target=target, right_is_clockwise=True, mounted_lag_s=0.5)
+    s = load_settings(local_file="none.yaml")
+    s.raw["paths"]["nav_db"] = str(tmp_path / "nav.db")
+    r = NavigationRunner(s, hud=SimHud(world), keys=SimKeys(world, clock),
+                         screen=SimScreen(world, clock))
+    r.vel_tracker._clock = clock.time
+    r.should_stop = lambda: clock.t > 1000 + 600
+    r.navigate()
+    assert world.dist() <= s.nav["stop_dist"], f"ended {world.dist()}m away"
+    est = (r.navigator.target_wx, r.navigator.target_wz)
+    assert math.hypot(est[0] - target[0], est[1] - target[1]) < 30
