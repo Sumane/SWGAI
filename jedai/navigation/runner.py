@@ -17,7 +17,7 @@ from ..perception.text import fuzzy_match, repair_extra_digit
 from .dstar_lite import DStarLite
 from .grid_db import CLEAR, NavDatabase
 from .navigator import Navigator
-from .reading_filter import MotionGate
+from .reading_filter import DistanceGate, MotionGate
 from .recorder import RunRecorder
 from .velocity import VelocityTracker
 
@@ -69,8 +69,7 @@ class NavigationRunner:
         # Distance misreads are systematic (887 -> 8987 several times in a row),
         # so a jump is only believed once it has held for 8 s with nothing
         # plausible in between.
-        self.dist_gate = MotionGate(10.0, lambda: self.max_speed, recover_secs=8.0,
-                                    clock=lambda: time.time())
+        self.dist_gate = DistanceGate(clock=lambda: time.time())
         self.rejected_dists = 0
         self.rec = RunRecorder(None, enabled=False)   # replaced per run in navigate()
         self.last_raw_coords = None
@@ -142,13 +141,13 @@ class NavigationRunner:
         self.last_raw_dist = best.distance
         raw = best.distance
         g = self.dist_gate
+        pos = self.player[::2] if self.player[0] is not None else None
         if g.last is not None and raw is not None:
-            tol = g._allowed(time.time() - g.t_last) if g.t_last is not None else g.base_tol
-            fixed = repair_extra_digit(raw, g.last, tol)
+            fixed = repair_extra_digit(raw, g.last, g.allowed(pos))
             if fixed != raw:
                 self.rec.event("dist_repaired", raw=raw, fixed=fixed)
                 raw = fixed
-        dist = g.check(raw)
+        dist = g.check(raw, pos)
         if dist is None and best.distance is not None:
             self.rejected_dists += 1
             self.rec.event("dist_rejected", raw=best.distance, last=self.dist_gate.last)

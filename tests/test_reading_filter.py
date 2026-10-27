@@ -59,3 +59,30 @@ def test_extra_digit_from_the_arrow_is_repaired():
     assert repair_extra_digit(8989, 898, 15) == 898
     assert repair_extra_digit(1105, 980, 15) == 1105     # a real change from 3 to 4 digits stays
     assert repair_extra_digit(305, 299, 15) == 305       # same length: untouched
+
+
+def test_distance_cant_jump_more_than_the_bot_moved():
+    """In-game: 898 m -> 78 m (another waypoint's row) accepted after a minute of misreads."""
+    from jedai.navigation.reading_filter import DistanceGate
+    c = Clock()
+    g = DistanceGate(clock=c)
+    assert g.check(898, (0, 0)) == 898
+    for _ in range(5):
+        g.check(900, (0, 0))
+    c.t = 60.0
+    assert g.check(78, (2, 0)) is None          # moved 2 m: can't be 820 m closer
+    for i in range(40):                          # however long it persists
+        c.t += 1
+        assert g.check(8986, (2, 0)) is None
+    assert g.check(880, (15, 0)) == 880          # moved 15 m, 20 m closer: fine
+
+
+def test_distance_gate_settles_on_a_bad_starting_value():
+    from jedai.navigation.reading_filter import DistanceGate
+    c = Clock()
+    g = DistanceGate(clock=c)
+    g.check(8987, (0, 0))                       # the waypoint list itself was misread
+    for i in range(10):
+        c.t += 1
+        out = g.check(887, (0, 0))
+    assert out == 887

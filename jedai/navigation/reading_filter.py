@@ -77,3 +77,61 @@ class MotionGate:
         if len(self.pending) > 50:
             self.pending = self.pending[-50:]
         return None
+
+
+class DistanceGate:
+    """
+    Waypoint distance filter that uses where the bot actually is.
+
+    The distance to a fixed waypoint can't change by more than the bot has
+    moved. FIX (in-game, 27 Oct): the old time-based allowance grew while no
+    good reading came in, so after ~1 min of misreads a jump from 898 m to
+    78 m (another waypoint's row) was "possible", and then 8986 m after 8 s:
+    the watchdog stopped a run that was 78-898 m out. Now the allowance is
+    tolerance + 1.2 x metres moved since the last good reading. Readings that
+    break that are never believed, except while the gate is still settling
+    (its first few readings, when the starting value itself may be a misread).
+    """
+
+    def __init__(self, tol: float = 15.0, settle_readings: int = 5,
+                 recover_secs: float = 8.0, clock=time.time):
+        self.tol = tol
+        self.settle = settle_readings
+        self.recover_secs = recover_secs
+        self.clock = clock
+        self.reset()
+
+    def reset(self, value=None):
+        self.last = value
+        self.last_pos = None
+        self.t_last = self.clock() if value is not None else None
+        self.accepted = 0 if value is None else 1
+        self.pending = []
+
+    def allowed(self, pos) -> float:
+        moved = 0.0
+        if pos is not None and self.last_pos is not None:
+            moved = math.hypot(pos[0] - self.last_pos[0], pos[1] - self.last_pos[1])
+        elif self.t_last is not None:
+            moved = 16.0 * min(self.clock() - self.t_last, 10.0)    # no position: bounded guess
+        return self.tol + 0.02 * (self.last or 0) + 1.2 * moved
+
+    def check(self, value, pos=None):
+        if value is None:
+            return None
+        now = self.clock()
+        if self.last is None or abs(value - self.last) <= self.allowed(pos):
+            self.last, self.t_last = value, now
+            if pos is not None:
+                self.last_pos = pos
+            self.accepted += 1
+            self.pending = []
+            return value
+        if self.accepted < self.settle:
+            # still settling: a run of readings that agree for recover_secs wins
+            self.pending = [(v, t) for v, t in self.pending if abs(v - value) <= self.tol] + [(value, now)]
+            if len(self.pending) >= 3 and now - self.pending[0][1] >= self.recover_secs:
+                self.reset(value)
+                self.last_pos = pos
+                return value
+        return None
