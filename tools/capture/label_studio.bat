@@ -1,1 +1,0 @@
-& "C:\Users\marc\label_work\ls_env\Scripts\label-studio.exe" start --data-dir "E:\label_work"

@@ -29,7 +29,7 @@ The project went dormant after that README, then was rebuilt from scratch in 202
 
 | 2017 step | What actually happened |
 |---|---|
-| **1. Making sense of its environment** (YOLO on the game display) | Built, and the 2017 instinct was right. Eight YOLOv8-nano detectors read the HUD: waypoint group, panel and components, waypoint arrow, distance digits, minimap, coordinate field and coordinate digits. All score 0.99+ mAP50 (table below). EasyOCR reads waypoint names. The unglamorous part was building the training data: capture, frame extraction, clustering, auto-labelling. |
+| **1. Making sense of its environment** (YOLO on the game display) | Built, and the 2017 instinct was right. Eight YOLO detectors (YOLOv8n/s and YOLO11n) read the HUD: waypoint group, panel and components, waypoint arrow, distance digits, minimap, coordinate field and coordinate digits. All score 0.99+ mAP50 (table below). EasyOCR reads waypoint names. The unglamorous part was building the training data: capture, frame extraction, clustering, auto-labelling. |
 | **2. Path finding** | Built, and it became the bulk of the work. The navigator went through many versions (header v0.02 to v0.20) and three architectures: speed-based obstacle handling, then wall-hugging with "frustration" exploration, then a D* Lite planner over a persistent SQLite grid map. The bot can reach a waypoint in open terrain. Cities still beat it. The "imagination" problem from 2017 is real. |
 | **3. Interacting with the environment** (combat and skill trees) | Not built yet. It's designed as a council of specialist agents (below) rather than one learning process. |
 | **4. Enhancing current levels of skill** ("revisit at that point") | Revisited. This became a five-tier completion target and a plan for the bot to commission its own tools. |
@@ -38,38 +38,42 @@ The biggest change in approach: the 2017 plan assumed one machine-learning algor
 
 ## What's in this repo
 
-| Path | Contents |
-|---|---|
-| `jedai/Scripts/movement/navigation_v0_12.py` | **Current navigator** (internal header: v0.20, "D* first architecture") |
-| `jedai/Scripts/movement/master_controller.py` | Key executor. Reads commands from `nav_state.json` and sends them with `pydirectinput` |
-| `jedai/Scripts/movement/dstar_lite.py` | D* Lite planner |
-| `jedai/Scripts/movement/nav_database.py` | SQLite spatial grid (5 m cells, 1 m fine mode), keyed by planet |
-| `jedai/Scripts/movement/navigation_v0*.py` | Earlier navigator versions, kept as a record. Filenames and internal version numbers don't match (see the status doc) |
-| `jedai/Scripts/movement/depth_perception.py` | Depth Anything V2 steering experiment (only wired into the v0.02 navigator) |
-| `jedai/Scripts/movement/speed detection and logic/` | Speedometer from coordinate deltas |
-| `jedai/Scripts/movement/JEDAI_NAVIGATION_README.md` | Navigation design notes (written for v0.19) |
-| `jedai/models/<model>/` | Training args and per-epoch metrics for each YOLO model. **Weights aren't in git** |
-| `tools/capture/` | Video capture, frame extraction (FFmpeg, including a GPU path for AV1), clean-up, clustering, review, and a CLIP scene-classifier experiment |
-| `tools/datasets/` | Data mining, auto-labelling, splitting and training scripts for the waypoint-panel and waypoint-component datasets |
-| `tools/validation/testvalidation.py` | Manual detector-cascade and OCR check on random screenshots |
-| `docs/PROJECT_STATUS_2026-09.md` | Independent code-and-artefact review from September 2026. The most honest account of what's verified and what isn't |
+```
+config/settings.yaml   one file for paths, monitor, planet, keys and tuning
+                       (put your own values in config/settings.local.yaml)
+jedai/                 the bot
+  perception/          screen capture + HUD reading (the 8 YOLO models, OCR)
+  control/             command channel, key client, master controller
+  navigation/          navigator state machine, D* Lite planner, SQLite grid map
+scripts/               run_controller.py, run_navigator.py,
+                       calibrate_speed.py, check_turn_direction.py
+tools/                 capture -> crop -> auto-label -> train (see tools/README.md)
+models/                training records for each model; weights go here (not in git)
+tests/                 offline tests, including a simulated drive
+archive/navigation/    every earlier navigator version, untouched
+docs/                  reorganisation notes and the September 2026 status review
+```
+
+The code was reorganised in October 2026 from two messy drive folders. The
+other doc ([docs/REORGANISATION.md](docs/REORGANISATION.md)) maps every old
+file to its new home and lists the bugs fixed along the way.
 
 ### Vision models
 
-The scores are from the last recorded epoch in each `results.csv` (bounding-box mAP).
+The scores are from the last recorded epoch in each `results.csv` (bounding-box mAP). There's more detail in [models/README.md](models/README.md).
 
-| Model | Reads | Epochs | mAP50 | mAP50-95 |
-|---|---|---:|---:|---:|
-| `wp_group_v0101` | Waypoint list group | 100 | 0.995 | 0.958 |
-| `wp_panel_v2_production3` | Waypoint panel | 147 | 0.995 | 0.984 |
-| `wp_components_v3` | Panel components | 150 | 0.995 | 0.948 |
-| `wp_direction_v2_final` | Waypoint arrow | 150 | 0.989 | 0.901 |
-| `wp_distance` | Distance digits | 100 | 0.995 | 0.990 |
-| `mini_map_v01.00` | Minimap | 100 | 0.995 | 0.982 |
-| `player_coord_v1.01` | Coordinate field | 151 | 0.995 | 0.953 |
-| `white_on_teal_digits_v01.00` | Coordinate digits | 200 | 0.993 | 0.989 |
+| Model | Reads | Base | mAP50 | mAP50-95 |
+|---|---|---|---:|---:|
+| `wp_group_v0101` | Waypoint list window | YOLOv8n | 0.995 | 0.958 |
+| `wp_panel_v2_production3` | Waypoint row | YOLOv8n | 0.995 | 0.984 |
+| `wp_components_v3` | Name / distance in a row | YOLOv8n | 0.995 | 0.948 |
+| `wp_direction_v2_final` | Waypoint arrow | YOLO11n | 0.989 | 0.901 |
+| `wp_distance` | Distance digits | YOLOv8s | 0.995 | 0.990 |
+| `mini_map_v01.00` | Minimap | YOLOv8s | 0.995 | 0.982 |
+| `player_coord_v1.01` | Coordinate fields | YOLOv8s | 0.995 | 0.953 |
+| `white_on_teal_digits_v01.00` | Coordinate digits | YOLOv8s | 0.993 | 0.989 |
 
-These are detector scores, not proof that the bot navigates. They haven't been checked for near-duplicate frames leaking between the training and validation sets.
+These are detector scores, not proof that the bot navigates. They haven't been checked for near-duplicate frames leaking between the training and validation sets. The arrow and digit models were also trained with horizontal flipping, which mislabels mirrored arrows; the training presets now turn it off.
 
 **Bootstrapping loop used to build the datasets**
 1. Hand-label a small batch.
@@ -93,6 +97,18 @@ These are detector scores, not proof that the bot navigates. They haven't been c
   - The cause: swoop inertia makes logged coordinates lag the true position by metres, which poisons the grid map. So the bot needs to **dismount and walk in cities**.
   - Planned trigger: SWG prints *"You have entered…"* about 200 m before a city boundary. A system-message region filter plus a per-letter YOLO text reader would let any system message fire a function, and dismounting would be the first.
   - Tried and failed: steering towards the deepest region (left, centre or right) of a Depth Anything V2 heatmap. It couldn't handle small obstacles.
+
+**What the simulator showed.** Driving the real navigator code through a
+simulated world (`tests/test_simulated_drive.py`) turned up two things:
+- **The steering may turn the wrong way.** If SWG's X is east and Z is north,
+  the original code taps LEFT when D*'s next cell is to the right. In the
+  simulator that mismatch never arrives; with the sign matched, it arrives
+  every time. That may be why none of the 13 logged v0.20 runs completed. It's
+  now a setting, and `scripts/check_turn_direction.py` measures it in-game.
+- **Obstacles are handled very inefficiently.** Every "try this cell" drives
+  forward for a fixed 3–4 seconds, which is 48–64 m on a swoop for a 5–20 m
+  target. A 400 m trip past a wall took 2–3 km of driving, and a 400 m long
+  wall wasn't solved at all. This is the strongest lead for the city looping.
 
 **Planned rebuild (not in this repo yet).** A code review of the D* Lite version found seven bugs:
 - an alignment condition that could never be met
@@ -144,27 +160,26 @@ Perception ──► Council ──► Orchestrator + SanityCheck ──► Acti
 
 ## Running it
 
-This isn't packaged yet. The code targets **Windows** with the game visible, and many scripts still have hard-coded `E:\SWGEMU_bot\...` and `E:\label_work\...` paths.
+This hasn't been run in-game since the reorganisation, so supervise the first runs.
+The code targets **Windows** with the game visible.
 
-It needs Python 3 with:
-- `ultralytics`, `easyocr`, `opencv-python`, `numpy`, `mss`, `keyboard`, `pydirectinput`
-- PyTorch with CUDA
-- FFmpeg, for the capture tools
-
-There's no pinned requirements file yet.
-
-Put the model weights at `jedai/models/<model_name>/weights/best.pt`. Then open two terminals in `jedai/Scripts/movement/` and run:
+1. Install PyTorch with CUDA (`tools/install_cuda_torch.bat`), then run `pip install -r requirements.txt`.
+2. Copy `config/settings.local.example.yaml` to `config/settings.local.yaml`. Set `paths.data_dir`, and `paths.nav_db` if you want to keep an existing map.
+3. Put the weights in `models/<name>/weights/best.pt`, or point `paths.models_dir` at them.
+4. Once, with the controller running, run `python scripts/check_turn_direction.py`. Set `navigation.right_turn_sign` to the value it prints.
+5. Run each of these in its own terminal:
 
 ```
-python master_controller.py
-python navigation_v0_12.py
+python scripts/run_controller.py
+python scripts/run_navigator.py
 ```
 
-The navigator asks for a vehicle, scans your waypoints and asks you to pick one. Switch focus back to the game during the countdown. **F8** stops it. The defaults are planet `naboo` and monitor `2`.
+The navigator asks for a vehicle, scans your waypoints and asks you to pick
+one. Switch focus back to the game during the countdown. **F8** stops both.
 
-**Known issues**
-- `speed_config.json` has a trailing comment that makes it invalid JSON, so the navigator silently falls back to its built-in speeds.
-- The two processes talk through a single JSON file with no locking, so commands can be lost or partially read.
+To calibrate a vehicle's speed: `python scripts/calibrate_speed.py --mode swoop --save`.
+
+**Tests (no game needed):** `python -m pytest tests`
 
 ## Disclaimer
 

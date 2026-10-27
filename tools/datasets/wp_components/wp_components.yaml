@@ -1,6 +1,0 @@
-path: E:/SWGEMU_bot/YOLO exports/distance_and_description_dataset/processed
-train: train/images
-val: val/images
-
-nc: 2
-names: ['description', 'distance']

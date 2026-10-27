@@ -1,0 +1,15 @@
+# Copy this file to settings.local.yaml and change what you need.
+# Only the values you put here override settings.yaml.
+
+paths:
+  # Keep big data outside the repo, e.g. on the data drive:
+  data_dir: "E:/label_work"
+  nav_db: "E:/SWGEMU_bot/jedai/Scripts/movement/jedai_nav.db"   # reuse your existing map
+  # Point at the old weights folder if you don't want to copy them:
+  # models_dir: "E:/SWGEMU_bot/jedai/models"
+
+screen:
+  monitor_index: 2
+
+game:
+  planet: naboo

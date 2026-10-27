@@ -1,7 +1,0 @@
-# Updated wp_panel.yaml
-path: E:/SWGEMU_bot/YOLO exports/wp_panel_dataset/raw_data/auto-label
-train: train/images
-val: val/images
-
-nc: 1
-names: ['wp_panel']

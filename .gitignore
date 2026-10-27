@@ -1,14 +1,23 @@
-# Model weights and checkpoints (distribute via GitHub Releases)
+# Your machine's settings
+config/settings.local.yaml
+
+# Data: datasets, screenshots, runs, nav map, command file (set paths.data_dir)
+data/
+
+# Model weights and checkpoints (attach to a GitHub Release instead)
 *.pt
 *.pth
+
 # Runtime state
 *.db
 *.db-shm
 *.db-wal
 nav_state.json
 depth_bridge.json
+*.tmp
 debug_logs/
-# Captures and datasets
+
+# Captures and datasets dropped in the repo by accident
 *.mp4
 *.ivf
 *.jsonl
@@ -16,8 +25,14 @@ raw_data/
 processed/
 uncertain_captures/
 clean_data/
-# Third-party checkout (clone separately from DepthAnything/Depth-Anything-V2)
-jedai/Scripts/depth_anything_v2/
+labeled/
+image_features.json
+clusters.json
+
+# Third-party checkout (see tools/experiments/depth/depth_perception.py)
+tools/experiments/depth/depth_anything_v2/
+
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/

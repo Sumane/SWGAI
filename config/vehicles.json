@@ -1,0 +1,22 @@
+{
+  "walking": {
+    "max": 5.2,
+    "p95": 5.0,
+    "threshold": 2.5
+  },
+  "running": {
+    "max": 10.5,
+    "p95": 9.5,
+    "threshold": 4.75
+  },
+  "speederbike": {
+    "max": 14.0,
+    "p95": 13.5,
+    "threshold": 6.75
+  },
+  "swoop": {
+    "max": 16.0,
+    "p95": 15.0,
+    "threshold": 7.5
+  }
+}

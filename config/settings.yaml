@@ -1,0 +1,97 @@
+# =============================================================================
+# JedAI settings
+#
+# This is the ONE place to change paths, screen, planet, keys and tuning.
+# Don't edit this file for your own machine. Instead, copy the lines you want
+# to change into  config/settings.local.yaml  (it's git-ignored) and change
+# them there. Anything you leave out keeps the value below.
+#
+# Relative paths are relative to the repo folder (the one with README.md).
+# Absolute paths work too, e.g.  data_dir: "E:/label_work"
+# =============================================================================
+
+paths:
+  models_dir: models            # each model lives in <models_dir>/<name>/weights/best.pt
+  data_dir: data                # datasets, screenshots, training runs (git-ignored)
+  nav_db: data/jedai_nav.db     # the navigation grid map (SQLite)
+  command_file: data/nav_state.json   # navigator -> controller command channel
+  debug_dir: data/debug_logs
+  vehicles: config/vehicles.json      # vehicle speed calibration (speedometer writes here)
+
+screen:
+  monitor_index: 2              # which monitor the game is on (mss numbering, 1 = primary)
+
+game:
+  planet: naboo                 # grid map is stored per planet
+
+# The 8 YOLO models the navigator uses (folder names under models_dir)
+models:
+  group:    wp_group_v0101              # waypoint list window
+  panel:    wp_panel_v2_production3     # one waypoint row
+  comp:     wp_components_v3            # name / distance inside a row
+  arrow:    wp_direction_v2_final       # waypoint arrow (relative bearing!)
+  wp_digit: wp_distance                 # distance digits
+  minimap:  mini_map_v01.00             # minimap
+  coords:   player_coord_v1.01          # x/y/z fields under the minimap
+  co_digit: white_on_teal_digits_v01.00 # coordinate digits
+
+# Logical key -> physical key (pydirectinput names). Used by the controller.
+keys:
+  LEFT: left
+  RIGHT: right
+  AUTORUN: numlock
+  FORWARD: up
+  BACK: down
+  kill: f8                      # stops both navigator and controller
+
+navigation:
+  loop_interval: 0.05           # seconds between main loop ticks
+  default_vehicle: swoop
+
+  # Arrival
+  stop_dist: 50                 # metres: start counting arrival readings
+  verify_readings: 5            # consecutive close readings = arrived
+  final_creep_dist: 20          # metres: pulse forward instead of holding
+  creep_pulse_on: 0.8
+  creep_pulse_off: 0.15
+
+  # Vision
+  fuzzy_threshold: 0.5          # waypoint name match ratio
+  ocr_stale_limit: 15.0         # seconds without a distance before re-aligning
+  scan_steps: 4                 # turns during the initial waypoint scan
+  scan_turn_time: 0.9
+  scan_settle: 0.4
+  tab_in_pause: 4               # seconds to switch focus back to the game
+  max_coord_jump: 50.0          # metres: ignore coordinate readings that jump further
+
+  # Movement / grid
+  corridor_width: 5.0
+  clear_hz: 2.0                 # how often CLEAR cells are stamped (per second)
+  recal_attempt_secs: 3.0       # seconds trying a neighbour cell before marking it blocked
+  explore_turn_secs: 1.5
+  explore_hold_secs: 2.0
+  explore_leg_m: 20.0           # cross-exploration leg length
+  explore_leg_secs: 4.0
+  cell_size: 5.0                # must match the grid resolution below
+  stop_speed_ratio: 0.10        # below this fraction of max speed = stopped
+  stop_debounce: 3              # consecutive stopped ticks before recalibrating
+  steer_deadband: 0.15          # sin(angle) below which the bot drives straight
+  # Which way the RIGHT key turns the heading in X/Z coordinates.
+  #   1 = the original v0.20 code: taps RIGHT when the target is anticlockwise
+  #       of the heading (correct only if +X/+Z form a mirrored frame)
+  #  -1 = taps RIGHT when the target is clockwise (correct if X = east, Z = north)
+  # Run  python scripts/check_turn_direction.py  in-game to find out which is right.
+  right_turn_sign: 1
+
+planner:
+  cost_clear: 1.0
+  # 3.0 makes the planner prefer known-clear cells. The code review suspected
+  # this caused backward routing, but in the simulator (tests/test_simulated_drive.py)
+  # 1.0 was clearly worse: it failed walls that 3.0 got round. Keep 3.0.
+  cost_unexplored: 3.0
+  search_radius_m: 300.0
+  goal_reach_m: 8.0
+
+tools:
+  tesseract_cmd: ""             # only for tools/validation/test_hud_ocr.py, e.g. "E:/New folder/tesseract.exe"
+  label_studio_exe: ""          # only for tools/labeling/label_studio.bat

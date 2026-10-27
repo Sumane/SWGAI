@@ -1,11 +1,13 @@
 # SWGEmu Video Frame Extractor
 # Handles corrupted/broken AV1 videos by using IVF conversion + GPU decoding
-# Usage: .\extract_frames_gpu.ps1
+# Usage: .\extract_frames_gpu.ps1 -InputVideo "D:\recordings\training.mp4" [-OutputDir ...] [-Fps 1] [-Scale]
+#        (OutputDir defaults to a "screenshots" folder next to the video)
 
 param(
-    [string]$InputVideo = "E:\SWGEMU_bot\Video capture\Desktop\training.mp4",
+    [Parameter(Mandatory = $true)]
+    [string]$InputVideo,
     
-    [string]$OutputDir = "E:\SWGEMU_bot\Video capture\Desktop\screenshots",
+    [string]$OutputDir = "",
     
     [int]$Fps = 1,
     
@@ -37,6 +39,10 @@ if (-not $ffmpeg) {
 if (-not (Test-Path $InputVideo)) {
     Write-Host "ERROR: Input video not found at: $InputVideo" -ForegroundColor Red
     exit 1
+}
+
+if (-not $OutputDir) {
+    $OutputDir = Join-Path (Split-Path -Parent $InputVideo) "screenshots"
 }
 
 # Create output directory

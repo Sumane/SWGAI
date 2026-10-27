@@ -5,7 +5,7 @@ Monitors a folder and automatically processes new videos using
 IVF conversion + GPU acceleration for corrupted AV1 files.
 
 Usage:
-    python video_watcher.py --watch-dir "E:\SWGEMU_bot\Video capture\Desktop"
+    python tools/capture/video_watcher.py --watch-dir "D:/recordings" [--output-dir ...] [--fps 1]
 """
 
 import os

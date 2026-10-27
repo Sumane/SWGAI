@@ -1,0 +1,21 @@
+# Core (navigator + tools). Install PyTorch with CUDA first:
+#   tools/install_cuda_torch.bat   or   https://pytorch.org/get-started/locally/
+ultralytics>=8.1
+easyocr
+opencv-python
+numpy
+pyyaml
+mss
+scikit-learn          # cluster.py (CLIP experiment)
+
+# Windows-only, for sending keys to the game
+keyboard; sys_platform == "win32"
+pydirectinput; sys_platform == "win32"
+
+# Optional
+# pytesseract         # tools/validation/test_hud_ocr.py (+ Tesseract installed)
+# label-studio        # tools/labeling/start_label_studio.py
+# git+https://github.com/openai/CLIP.git   # tools/experiments/clip
+
+# Tests (run offline, no game needed):  python -m pytest tests
+pytest

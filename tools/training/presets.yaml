@@ -1,0 +1,109 @@
+# =============================================================================
+# Training presets — one per JedAI model.
+#
+#   python tools/training/train.py --preset wp_panel
+#
+# Settings are copied from each model's recorded models/<name>/args.yaml.
+# `dataset` is a folder under <data_dir>/datasets/ laid out as:
+#     images/train  images/val  labels/train  labels/val   (+ optional classes.txt)
+# (tools/labeling/split_dataset.py and auto_label.py produce this layout)
+#
+# CHANGED from the recorded runs: fliplr is 0.0 for the arrow and text/digit
+# models. Horizontal flipping turns an NE arrow into an NW arrow that is still
+# labelled NE, and mirrored digits aren't real characters.
+# =============================================================================
+
+wp_group:            # the waypoint list window
+  dataset: wp_group
+  classes: [wp_group]
+  model: yolov8n.pt
+  epochs: 100
+  imgsz: 1280        # high res for small UI details
+  batch: 16
+  workers: 0
+
+wp_panel:            # one waypoint row inside the window
+  dataset: wp_panel
+  classes: [wp_panel]
+  model: yolov8n.pt
+  epochs: 150
+  imgsz: 640
+  rect: true         # stacked horizontal rows
+  batch: -1          # auto batch for available VRAM
+  patience: 30
+  save_period: 10
+  mosaic: 0
+  mixup: 0
+  hsv_v: 0.3         # brightness variance (night vs day)
+  overlap_mask: false
+
+wp_components:       # name / distance inside a row
+  dataset: wp_components
+  classes: [description, distance]
+  model: yolov8n.pt
+  epochs: 150
+  imgsz: 640
+  rect: true
+  batch: -1
+  mosaic: 0
+  hsv_v: 0.4         # low-contrast "ghost" waypoints
+  perspective: 0.0
+  overlap_mask: false
+
+wp_direction:        # waypoint arrow (relative bearing)
+  dataset: wp_direction
+  classes: [E, N, NE, NW, S, SE, SW, W]
+  model: yolo11n.pt
+  epochs: 150
+  imgsz: 320
+  batch: 32
+  patience: 30
+  fliplr: 0.0        # CHANGED (was 0.5): flips swap E/W meanings
+
+wp_distance:         # distance digits
+  dataset: wp_distance
+  classes: ["-", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+  model: yolov8s.pt
+  epochs: 100
+  imgsz: 640
+  batch: 16
+  workers: 0
+  fliplr: 0.0        # CHANGED (was 0.5)
+
+minimap:
+  dataset: minimap
+  classes: from_dataset   # read classes.txt in the dataset folder
+  model: yolov8s.pt
+  epochs: 100
+  imgsz: 640
+  batch: 16
+  workers: 0
+
+player_coord:        # x / y / z fields under the minimap
+  dataset: player_coord
+  classes: from_dataset
+  model: yolov8s.pt
+  epochs: 200
+  imgsz: 640
+  batch: 16
+  workers: 0
+  fliplr: 0.0        # CHANGED (was 0.5)
+
+coord_digits:        # white-on-teal coordinate digits
+  dataset: coord_digits
+  classes: ["-", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
+  model: yolov8s.pt
+  epochs: 200
+  imgsz: 340
+  batch: 16
+  workers: 0
+  fliplr: 0.0        # CHANGED (was 0.5)
+
+# Used by auto_label.py / yolo_factory.py when no preset is given
+default:
+  classes: from_dataset
+  model: yolov8n.pt
+  epochs: 150
+  imgsz: 640
+  batch: 16
+  workers: 0         # avoids the Windows shared-memory error 1455
