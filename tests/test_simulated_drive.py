@@ -318,3 +318,30 @@ def test_city_with_slow_vision_does_not_run_off(tmp_path, monkeypatch, seed):
     r.navigate()
     assert world.dist() <= s.nav["stop_dist"], f"ended {world.dist()}m away"
     assert worst[0] <= 800 + 100, f"got {worst[0]}m away (started 800m)"
+
+
+def test_run_is_recorded(tmp_path, monkeypatch):
+    """Every run leaves a folder with ticks, events, screenshots and a report."""
+    monkeypatch.delenv("JEDAI_NO_RECORD", raising=False)
+    clock = Clock()
+    for mod in (nav_mod, runner_mod):
+        monkeypatch.setattr(mod.time, "time", clock.time)
+        monkeypatch.setattr(mod.time, "sleep", clock.sleep)
+    answers = iter(["", "0"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    world = World(clock, target=(400.0, 0.0), walls=WALL, right_is_clockwise=True)
+    s = load_settings(local_file="none.yaml")
+    s.raw["paths"]["nav_db"] = str(tmp_path / "nav.db")
+    s.raw["paths"]["debug_dir"] = str(tmp_path / "runs")
+    r = NavigationRunner(s, hud=SimHud(world), keys=SimKeys(world, clock),
+                         screen=SimScreen(world, clock))
+    r.vel_tracker._clock = clock.time
+    r.should_stop = lambda: clock.t > 1000 + 900
+    r.navigate()
+    (run,) = list((tmp_path / "runs").iterdir())
+    for name in ("ticks.jsonl", "events.jsonl", "console.log", "report.html", "path.png",
+                 "distance.png", "summary.txt"):
+        assert (run / name).exists(), name
+    assert list((run / "shots").glob("*.jpg"))
+    kinds = (run / "events.jsonl").read_text()
+    assert '"stuck"' in kinds and '"unstick"' in kinds and '"end"' in kinds

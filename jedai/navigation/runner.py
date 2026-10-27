@@ -6,6 +6,7 @@ runs the interactive "drive to a waypoint" loop. (Was SWGMasterNavigator.)
 from __future__ import annotations
 
 import math
+import os
 import sys
 import time
 
@@ -17,6 +18,7 @@ from .dstar_lite import DStarLite
 from .grid_db import CLEAR, NavDatabase
 from .navigator import Navigator
 from .reading_filter import MotionGate
+from .recorder import RunRecorder
 from .velocity import VelocityTracker
 
 
@@ -70,6 +72,9 @@ class NavigationRunner:
         self.dist_gate = MotionGate(10.0, lambda: self.max_speed, recover_secs=8.0,
                                     clock=lambda: time.time())
         self.rejected_dists = 0
+        self.rec = RunRecorder(None, enabled=False)   # replaced per run in navigate()
+        self.last_raw_coords = None
+        self.last_raw_dist = None
 
     # =========================================================================
     def should_stop(self) -> bool:
@@ -88,6 +93,7 @@ class NavigationRunner:
         """Get off the vehicle and switch to the on-foot profile (mapping on)."""
         c = self.cfg
         print("\n🚶 Dismounting...")
+        self.rec.event("dismount", pos=self.player[::2])
         self.keys.stop_movement()
         self.keys.dismount(c["dismount_method"], c.get("dismount_command", "/dismount"),
                            c.get("dismount_key", ""))
@@ -105,8 +111,10 @@ class NavigationRunner:
     def update_coords(self, frame):
         """Read coords; reject jumps > max_coord_jump. Returns last accepted (x, y, z)."""
         x, y, z = self.hud.read_coords(frame)
+        self.last_raw_coords = (x, z) if x is not None and z is not None else None
         if x is not None and z is not None:
             if self.coord_gate.check((x, z)) is None:
+                self.rec.event("coord_rejected", raw=(x, z), last=self.player[::2])
                 return self.player        # implausible jump: misread
             self.player = (x, y, z)
             self.vel_tracker.update(x, z)
@@ -131,9 +139,11 @@ class NavigationRunner:
         best = min(candidates, key=lambda c: c[0])[1]
         # FIX: OCR sometimes adds a digit (887 m read as 9887 m or 8989 m). Those
         # readings wrecked the target estimate and the explore sweep's choice.
+        self.last_raw_dist = best.distance
         dist = self.dist_gate.check(best.distance)
         if dist is None and best.distance is not None:
             self.rejected_dists += 1
+            self.rec.event("dist_rejected", raw=best.distance, last=self.dist_gate.last)
         return best.arrow, dist, best.center
 
     def read_target_distance(self):
@@ -270,6 +280,13 @@ class NavigationRunner:
         self.close_read_count = 0
 
         run_id = self.db.start_run(self.planet, self.player[0] or 0, self.player[2] or 0, 0, 0)
+        record = c.get("record_runs", True) and not os.environ.get("JEDAI_NO_RECORD")
+        self.rec = RunRecorder(self.s.path("debug_dir"), self.target_name, enabled=record,
+                               shot_every_s=float(c.get("record_shot_every_s", 5.0)),
+                               clock=lambda: time.time())
+        self.rec.event("start", target=self.target_name, listed_distance=target["distance"],
+                       vehicle=self.current_vehicle, pos=self.player[::2])
+        result = "stopped"
 
         print(f"⏳  Resuming in {c['tab_in_pause']}s...")
         time.sleep(c["tab_in_pause"])
@@ -286,19 +303,45 @@ class NavigationRunner:
 
         try:
             arrived = self._main_loop(run_id)
+            result = "arrived" if arrived else self._end_reason
+        except BaseException as e:
+            result = f"crashed: {type(e).__name__}: {e}"
+            raise
         finally:
             print("\n\n🧹  Shutting down...")
             self.shutdown()
+            self.rec.close(result, *self._cells_for_report())
         if arrived:
             print("\n\n🏁  SUCCESS!")
+
+    _end_reason = "stopped"
+
+    def _cells_for_report(self):
+        """Blocked and clear cells round the run, for the report's map."""
+        try:
+            xs = [p[0] for p in self._run_track] or [0]
+            zs = [p[1] for p in self._run_track] or [0]
+            m = 100.0
+            cells = self.db.get_cells_in_region(self.planet, min(xs) - m, max(xs) + m,
+                                                min(zs) - m, max(zs) + m)
+            from .grid_db import BLOCKED
+            res = 5
+            blocked = [(c["cx"] * res, c["cz"] * res) for c in cells if c["state"] == BLOCKED]
+            clear = [(c["cx"] * res, c["cz"] * res) for c in cells if c["state"] == CLEAR]
+            return blocked, clear
+        except Exception:
+            return (), ()
 
     def _main_loop(self, run_id) -> bool:
         c, k, nav = self.cfg, self.keys, self.navigator
         lost_timer = None
+        self._run_track = []
+        worse_ticks = 0
 
         while True:
             if self.should_stop():
                 print("\n🛑 Kill key pressed - stopping")
+                self._end_reason = "kill key"
                 return False
 
             frame = self.screen.grab()
@@ -308,6 +351,8 @@ class NavigationRunner:
 
             # Lost the waypoint
             if dist is None:
+                self.rec.tick(frame, pos=pos, coords_raw=self.last_raw_coords, dist=None,
+                              dist_raw=self.last_raw_dist, arrow=arrow, state=nav.state, lost=True)
                 if lost_timer is None:
                     lost_timer = time.time()
                 elif time.time() - lost_timer > c["ocr_stale_limit"]:
@@ -323,6 +368,23 @@ class NavigationRunner:
 
             self.last_valid_dist = dist
             self.min_dist_seen = min(self.min_dist_seen, dist)
+            if pos is not None:
+                self._run_track.append(pos)
+
+            # Watchdog: give up (and keep the recording) if it has got a long way
+            # further from the waypoint than its closest point so far
+            limit = c.get("abort_if_further_m", 300.0)
+            if limit and dist > self.min_dist_seen + limit:
+                worse_ticks += 1
+                if worse_ticks >= 3:
+                    print(f"\n🛑 Watchdog: {dist}m away, {dist - self.min_dist_seen}m further than its "
+                          f"closest ({self.min_dist_seen}m). Stopping.")
+                    self.rec.event("watchdog", frame=frame, pos=pos, dist=dist, closest=self.min_dist_seen)
+                    self._end_reason = "watchdog: going the wrong way"
+                    k.key_up("FORWARD")
+                    return False
+            else:
+                worse_ticks = 0
             spd = self.vel_tracker.speed()
             spd_pct = spd / self.max_speed if self.max_speed > 0 else 0
 
@@ -342,6 +404,14 @@ class NavigationRunner:
                 self.close_read_count = 0
 
             steer = nav.tick(pos, spd_pct, arrow, dist)
+            est = (nav.target_wx, nav.target_wz) if nav.target_wx is not None else None
+            self.rec.tick(frame, pos=pos, coords_raw=self.last_raw_coords, dist=dist,
+                          dist_raw=self.last_raw_dist, arrow=arrow, speed=spd, speed_pct=spd_pct,
+                          state=nav.state, steer=steer, steer_by=nav.steer_by, heading=nav.heading,
+                          off_deg=nav.steer_angle_deg,
+                          est=est, est_sigma=nav.estimator.sigma_m, est_locked=nav.est_locked,
+                          goal=nav._goal_xy, carrot=nav._carrot, waypoint=nav.last_waypoint,
+                          mounted=self.mounted, vehicle=self.current_vehicle)
             if steer == "STOP":
                 k.key_up("FORWARD")
             elif steer == "DISMOUNT":
@@ -357,9 +427,9 @@ class NavigationRunner:
                     self.explore_sweep()
                     k.key_down("FORWARD")
             elif steer == -1:
-                k.tap("LEFT", 0.1)
+                k.tap("LEFT", nav.turn_tap_secs())
             elif steer == 1:
-                k.tap("RIGHT", 0.1)
+                k.tap("RIGHT", nav.turn_tap_secs())
 
             print("\r" + self.status_line(arrow, dist, spd, spd_pct, px, pz), end="", flush=True)
             time.sleep(c["loop_interval"])

@@ -120,6 +120,8 @@ class Navigator:
         planner is told and replans on its next update (FIX: D* cache miss).
         Returns True if the cell was recorded.
         """
+        if state == BLOCKED and not (self.mounted and self.cfg.get("mounted_mapping", "clear_only") != "all"):
+            self._ev("blocked", cell=(wx, wz))
         if self.mounted:
             # mounted_mapping: "clear_only" (default) = keep CLEAR, drop BLOCKED;
             # "none" = nothing while mounted; "all" = old behaviour
@@ -276,6 +278,8 @@ class Navigator:
                 return False
         old = self._goal_xy
         self._set_target(est[0], est[1], dist, pos)
+        self._ev("goal", pos=pos, est=est, sigma=self.estimator.sigma_m, dist=dist,
+                 readings=len(self.estimator.readings), carrot=self._carrot)
         old_s = f"({old[0]:.0f},{old[1]:.0f})" if old is not None else "(none)"
         print(f"\n[EST] Target {old_s} -> ({est[0]:.0f},{est[1]:.0f}) "
               f"±{self.estimator.sigma_m:.0f}m dist={dist}m readings={len(self.estimator.readings)}")
@@ -332,6 +336,18 @@ class Navigator:
             return True
         return self.heading[0] * (dx / mag) + self.heading[1] * (dz / mag) > 0.94
 
+    def turn_tap_secs(self):
+        """
+        How long to hold LEFT/RIGHT this tick: proportional to how far off we are.
+        FIX: every correction was a 0.1 s tap (~10°) once per ~2 s tick, about
+        5°/s. At 16 m/s that is a 180 m turning circle, and in the simulator the
+        bot orbited the waypoint 100 m out for six minutes.
+        """
+        rate = float(getattr(self.r, "turn_rate_deg_s", None) or self.cfg.get("turn_rate_deg_s", 100.0))
+        gain = float(self.cfg.get("steer_gain", 0.6))   # < 1: don't overshoot with coordinate lag
+        return max(0.1, min(float(self.cfg.get("steer_max_tap_secs", 0.8)),
+                            gain * self.steer_angle_deg / rate))
+
     def lookahead_waypoint(self):
         """
         A point a few cells along the D* path, not just the next cell.
@@ -346,6 +362,7 @@ class Navigator:
         return self.r.planner.next_waypoint()
 
     _behind_turn = 0
+    steer_angle_deg = 0.0
 
     def _cell_of(self, wx, wz):
         return (int(math.floor(wx / self.cell)), int(math.floor(wz / self.cell)))
@@ -364,7 +381,9 @@ class Navigator:
             return 0
         # FIX: normalise so the deadband is an angle (sin θ), not metres.
         cross = self._turn_cross(dx, dz) / mag
-        behind = (self.heading[0] * dx + self.heading[1] * dz) < 0
+        dot = (self.heading[0] * dx + self.heading[1] * dz) / mag
+        self.steer_angle_deg = math.degrees(math.atan2(abs(cross), dot))   # how far off, 0..180
+        behind = dot < 0
         if behind:
             # FIX: a target behind has cross ≈ 0 and its sign flips with every
             # wobble, so the bot tapped left, right, left... and drove 700 m the
@@ -689,11 +708,16 @@ class Navigator:
             if self.r.planner_active and self.r.planner.has_path():
                 wp = self.lookahead_waypoint()
                 if wp is not None:
+                    self.steer_by, self.last_waypoint = "D*", wp
                     return self.steer_toward(pos, wp[0], wp[1])
+            self.steer_by, self.last_waypoint = "arrow", None
 
             # No confident estimate yet: follow the arrow. It's drawn relative to
             # the screen, so E = target on your right = press RIGHT, whatever the
             # world axes do. FIX: S/SE/SW used to return 0 = drive straight away.
+            self.steer_angle_deg = float(ARROW_DEG.get(arrow, 0))
+            if self.steer_angle_deg > 180:
+                self.steer_angle_deg = 360 - self.steer_angle_deg
             if arrow in ("NE", "E", "SE", "S"):
                 return 1
             if arrow in ("NW", "W", "SW"):
@@ -705,6 +729,13 @@ class Navigator:
         return 0
 
     _last_arrow = None
+    steer_by = "-"
+    last_waypoint = None
+
+    def _ev(self, kind, **fields):
+        rec = getattr(self.r, "rec", None)
+        if rec is not None:
+            rec.event(kind, **fields)
     _heading_warned = 0.0
 
     def _check_heading_against_arrow(self, pos, arrow):
@@ -733,6 +764,8 @@ class Navigator:
             if now - self._heading_warned > 10:
                 print(f"\n[NAV] Heading disagrees with the arrow by {abs(math.degrees(err)):.0f}° — using the arrow")
                 self._heading_warned = now
+            self._ev("heading_override", pos=pos, arrow=arrow, was=self.heading,
+                     now=(math.cos(facing), math.sin(facing)), err_deg=abs(math.degrees(err)))
             self._seed_heading((math.cos(facing), math.sin(facing)))
 
     def _grinding(self, pos, now=None):
@@ -787,6 +820,7 @@ class Navigator:
 
     def _enter_recal(self, pos):
         print("\n[NAV] Stopped — entering RECALIBRATING")
+        self._ev("stuck", pos=pos, heading=self.heading, arrow=self._last_arrow, mounted=self.mounted)
         self.state = self.RECALIBRATING
         # Stuck before D* had a goal: give it the best estimate we have, so the
         # recalibration and D* can plan round the obstacle towards it.
@@ -844,6 +878,8 @@ class Navigator:
         go_s = float(c.get("unstick_forward_secs", 2.0))
         print(f"\n[UNSTICK] back {back_s:.1f}s, turn {'RIGHT' if side > 0 else 'LEFT'} "
               f"{angle:.0f}°, forward {go_s:.1f}s (stuck {n + 1}x here)")
+        self._ev("unstick", pos=pos, side="RIGHT" if side > 0 else "LEFT", angle=angle,
+                 times_here=n + 1, heading=self.heading)
 
         keys.stop_movement()
         keys.key_up("FORWARD")

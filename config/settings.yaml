@@ -55,6 +55,12 @@ navigation:
   loop_interval: 0.05           # seconds between main loop ticks
   default_vehicle: swoop
 
+  # Run recording (debugging): each run gets a folder under paths.debug_dir with
+  # every tick, every event, screenshots and report.html (open it in a browser)
+  record_runs: true
+  record_shot_every_s: 5.0      # plus a screenshot at every event (stuck, unstick, dismount...)
+  abort_if_further_m: 300       # watchdog: stop if this much further than its closest so far (0 = off)
+
   # Arrival
   stop_dist: 50                 # metres: start counting arrival readings
   verify_readings: 5            # consecutive close readings = arrived
@@ -83,6 +89,8 @@ navigation:
   stop_speed_ratio: 0.10        # below this fraction of max speed = stopped
   stop_debounce: 3              # consecutive stopped ticks before recalibrating
   steer_deadband: 0.15          # sin(angle) below which the bot drives straight
+  steer_gain: 0.6               # turn tap = gain x (degrees off) / turn_rate_deg_s ...
+  steer_max_tap_secs: 0.8       # ... capped at this
   steer_lookahead_cells: 3      # steer at a point this many cells along the D* path, not the next cell
   turn_rate_deg_s: 100.0        # how fast LEFT/RIGHT turn (scan_turn_time 0.9 s x 4 steps ~ 360°)
   unstick_back_secs: 1.0        # stuck: reverse this long,

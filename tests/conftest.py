@@ -19,6 +19,10 @@ def _stub(name, **attrs):
     sys.modules[name] = mod
 
 
+import os  # noqa: E402
+
+os.environ.setdefault("JEDAI_NO_RECORD", "1")   # tests don't write run recordings into data/
+
 _stub("keyboard", is_pressed=lambda key: False)
 _stub("pydirectinput", press=lambda k: None, keyDown=lambda k: None, keyUp=lambda k: None)
 try:

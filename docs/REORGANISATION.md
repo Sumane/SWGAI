@@ -174,6 +174,35 @@ The simulator can't fully judge this rule yet. It models coordinate lag and slid
 - **`cost_unexplored`.** The code review called 3.0 a bug. The simulator
   disagrees: 1.0 failed walls that 3.0 solved. Kept at 3.0.
 
+## Run recordings (debugging)
+
+Every `run_navigator.py` run is recorded to its own folder under
+`data/debug_logs/` (setting `paths.debug_dir`):
+
+| File | What |
+|---|---|
+| `report.html` | Open in a browser: what went wrong, the path map, the distance chart, every event with its screenshot |
+| `path.png` | Top-down map: path coloured by state, blocked (red) and clear (green) cells, where it thought the waypoint was, stuck/unstick/dismount markers |
+| `distance.png` | Waypoint distance over time, red where it was getting further away |
+| `summary.txt` | Each "wrong way" spell: when, how far, and whether D\* or the arrow was steering |
+| `ticks.jsonl` | Every tick: raw and accepted coordinates and distance, arrow, speed, heading, state, steering decision, target estimate, D\* goal |
+| `events.jsonl` | stuck, unstick, dismount, goal moves, cells marked blocked, misreads rejected, heading overrides |
+| `console.log` | Everything printed |
+| `shots/` | A screenshot every 5 s, and one at every event |
+
+`python scripts/review_run.py` rebuilds the report for the latest run and
+prints the summary and last events (`--list` lists runs). To get help with a
+run, zip its folder and send it.
+
+**Watchdog:** a run stops itself if the bot gets `abort_if_further_m` (300 m)
+further from the waypoint than its closest point so far. Set it to 0 to turn
+it off; `record_runs: false` turns recording off.
+
+The recorder found its first bug in the simulator: steering was one 0.1 s tap
+(~10°) per ~2 s tick, about 5°/s, so the bot orbited the waypoint 100 m out
+for six minutes. Taps are now proportional to how far off it is
+(`steer_gain`, `turn_rate_deg_s`).
+
 ## Testing without the game
 
 ```
