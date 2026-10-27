@@ -4,7 +4,7 @@ Check the depth -> blocked/clear cells pipeline in game, before it goes near D*.
 Stand somewhere with obvious walls and open ground ahead, then (controller
 running, game focused within the countdown):
 
-    python scripts/depth_check.py                 # first person, hide HUD, grab, HUD back
+    python scripts/depth_check.py                 # first person, hide HUD (Shift+Ctrl+H), grab, HUD back
     python scripts/depth_check.py --repeat 10     # a shot every 2 s while you walk about
     python scripts/depth_check.py --image shot.png --no-keys   # an existing screenshot
 
@@ -44,12 +44,15 @@ def load_model(device):
     return m.to(device).eval()
 
 
+HUD_KEYS = list(settings.raw.get("game", {}).get("hud_toggle_keys", ["shift", "ctrl", "h"]))
+
+
 def grab_without_hud(keys, screen, settle):
-    """Ctrl+H (HUD off), grab, Ctrl+H (HUD back). The bot needs the HUD for everything else."""
-    keys.tap_multi(["ctrl", "h"])
+    """Shift+Ctrl+H (HUD off), grab, Shift+Ctrl+H (HUD back). The bot needs the HUD for everything else."""
+    keys.tap_multi(HUD_KEYS)
     time.sleep(settle)
     frame = screen.grab()
-    keys.tap_multi(["ctrl", "h"])
+    keys.tap_multi(HUD_KEYS)
     time.sleep(settle)
     return frame
 
@@ -64,7 +67,7 @@ def main():
     ap.add_argument("--image", help="process this screenshot instead of grabbing")
     ap.add_argument("--no-keys", action="store_true", help="don't zoom to first person or toggle the HUD")
     ap.add_argument("--zoom-secs", type=float, default=2.0, help="how long to hold NUMPAD+ to reach first person")
-    ap.add_argument("--settle", type=float, default=0.15, help="wait after Ctrl+H before grabbing")
+    ap.add_argument("--settle", type=float, default=0.15, help="wait after the HUD toggle before grabbing")
     ap.add_argument("--device", default="cuda")
     a = ap.parse_args()
 

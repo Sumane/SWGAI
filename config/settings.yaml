@@ -30,6 +30,7 @@ platform:
 
 game:
   planet: naboo                 # grid map is stored per planet
+  hud_toggle_keys: [shift, ctrl, h]   # hides/shows the whole HUD (depth frames need it hidden)
 
 # The 8 YOLO models the navigator uses (folder names under models_dir)
 models:
