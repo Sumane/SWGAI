@@ -108,6 +108,11 @@ Each one was confirmed against the original code before fixing, and is covered b
 | 22 | Grinding along a wall at an angle never counted as stopped (speed stays above 10%) | Simulator with wall sliding | New check: less than 8 m covered in 6 s = stuck. The cells beside the slide are marked blocked (on foot) |
 | 23 | The kill key was only read once per tick (~2 s with vision), so a quick tap of F8 was missed | First in-game drive | A background thread watches it every 20 ms and remembers the press |
 | 24 | The simulator let the bot tunnel through a 10 m wall (one big step per key event), and stopped it dead at walls instead of sliding | — | **The old wall test passed for the wrong reason.** With that fixed, v0.20 logic fails every wall case; the current code gets round a 120 m wall (3/3) but a 300 m wall is still too slow (1/3 in 15 min). See known issues |
+| 25 | **Coordinate filter froze the position.** Any reading more than 50 m from the last accepted one was rejected, forever | Second in-game drive: "moved 0.0m" on every attempt, speed 0 at the start of the main loop | With ~2 s vision ticks a swoop covers 30+ m per tick; one long gap and every later reading was "a jump". Now the allowance grows with time (vehicle max speed × time), and three readings that agree with each other replace a bad old one (`reading_filter.py`) |
+| 26 | **OCR distance misreads used as real** (887 m read as 9887, 8989, 8898; 1535 in the sweep) | Second in-game drive | Wrecked the target estimate (it jumped to 7 km away) and the explore sweep's left/right choice. Distances are now gated the same way, and the estimator uses robust (Huber) fitting with a median-based spread |
+| 27 | Cell attempts with no heading drove straight on for the whole attempt | Second in-game drive: "not reached (moved 78.6m)" ×6, going further away each time | A short forward pulse gets a heading first; an attempt gives up after travelling the distance + 15 m |
+| 28 | A D\* goal set early (bot stuck before the estimate was confident) was never updated | Second in-game drive | The goal now follows the estimate whenever D\* is running |
+| 29 | Kill key latch cleared itself when read, so an inner loop could swallow F8 | Second in-game drive ("No acknowledgement" after F8) | Sticky: once seen, it stays pressed |
 
 ## Behaviour changes to know about
 

@@ -179,11 +179,11 @@ class LatchedKeyState:
             time.sleep(self._poll)
 
     def is_pressed(self, key: str) -> bool:
+        # Sticky: once the kill key was seen it stays pressed. FIX: reading it
+        # cleared it, so if an inner loop saw the press and returned, the main
+        # loop didn't, and the bot carried on after F8.
         with self._lock:
-            if key in self._seen:
-                self._seen.discard(key)
-                return True
-        return False
+            return key in self._seen
 
 
 def make_key_state(settings, latch_keys=None):

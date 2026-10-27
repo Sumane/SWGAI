@@ -54,6 +54,7 @@ class TargetEstimator:
         self.half_width = math.radians(22.5 + sector_margin_deg)
         self.sector_sigma = math.radians(sector_sigma_deg)
         self.sign = right_turn_sign
+        self.huber_k = 2.5        # residuals beyond 2.5 sigma count as outliers
         self.readings = []   # (x, z, d, bearing or None)
         self.estimate = None
         self.rms = None
@@ -103,9 +104,14 @@ class TargetEstimator:
             dx, dz = tx - x, tz - z
             rng = math.hypot(dx, dz) or 1e-6
             r = (rng - d) * wd
+            # Huber weighting: a misread distance that got past the runner's
+            # filter pulls with a constant, not growing, force
+            k = self.huber_k
+            w = 1.0 if abs(r) <= k else k / abs(r)
             j1, j2 = dx / rng * wd, dz / rng * wd
-            a11 += j1 * j1; a12 += j1 * j2; a22 += j2 * j2; g1 += j1 * r; g2 += j2 * r
-            cost += r * r
+            a11 += w * j1 * j1; a12 += w * j1 * j2; a22 += w * j2 * j2
+            g1 += w * j1 * r; g2 += w * j2 * r
+            cost += r * r if abs(r) <= k else 2 * k * abs(r) - k * k
             if use_arrow and b is not None:
                 err = _wrap(math.atan2(dz, dx) - b)
                 excess = abs(err) - self.half_width
@@ -149,8 +155,9 @@ class TargetEstimator:
                 break
             if step < 0.05:
                 break
-        res = [math.hypot(tx - x, tz - z) - d for x, z, d, _ in self.readings]
-        rms = math.sqrt(sum(r * r for r in res) / len(res))
+        res = sorted(abs(math.hypot(tx - x, tz - z) - d) for x, z, d, _ in self.readings)
+        # robust spread: 1.48 * median absolute residual (ignores a few misreads)
+        rms = 1.4826 * res[len(res) // 2]
         return tx, tz, rms, cost
 
     def solve(self):
@@ -186,6 +193,8 @@ class TargetEstimator:
             sep = math.hypot(ox - bx, oz - bz)
             if sep > 2 * self.dist_sigma and ocost - cost < max(4.0, 0.1 * n):
                 sigma = max(sigma, sep / 2)
+        #  2b. readings fit worse than expected (lag, misreads): scale up
+        sigma *= max(1.0, rms / self.dist_sigma)
         #  3. never worse than the arrow sector itself
         rng = math.hypot(bx - lx, bz - lz)
         self.sigma_m = min(sigma, max(rng * math.tan(self.half_width), 1.0))

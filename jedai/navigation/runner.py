@@ -16,6 +16,7 @@ from ..perception.text import fuzzy_match
 from .dstar_lite import DStarLite
 from .grid_db import CLEAR, NavDatabase
 from .navigator import Navigator
+from .reading_filter import MotionGate
 from .velocity import VelocityTracker
 
 
@@ -60,6 +61,11 @@ class NavigationRunner:
         self.min_dist_seen = 99999
         self.close_read_count = 0
         self.player = (None, None, None)   # last accepted (x, y, z)
+        # Drop readings that would need the bot to move faster than its vehicle
+        self.coord_gate = MotionGate(self.cfg["max_coord_jump"] / 5.0, lambda: self.max_speed,
+                                     clock=lambda: time.time())
+        self.dist_gate = MotionGate(10.0, lambda: self.max_speed, clock=lambda: time.time())
+        self.rejected_dists = 0
 
     # =========================================================================
     def should_stop(self) -> bool:
@@ -96,10 +102,8 @@ class NavigationRunner:
         """Read coords; reject jumps > max_coord_jump. Returns last accepted (x, y, z)."""
         x, y, z = self.hud.read_coords(frame)
         if x is not None and z is not None:
-            px, _, pz = self.player
-            if px is not None and pz is not None and \
-                    math.hypot(x - px, z - pz) > self.cfg["max_coord_jump"]:
-                return self.player
+            if self.coord_gate.check((x, z)) is None:
+                return self.player        # implausible jump: misread
             self.player = (x, y, z)
             self.vel_tracker.update(x, z)
         return self.player
@@ -121,7 +125,12 @@ class NavigationRunner:
         if not candidates:
             return None, None, None
         best = min(candidates, key=lambda c: c[0])[1]
-        return best.arrow, best.distance, best.center
+        # FIX: OCR sometimes adds a digit (887 m read as 9887 m or 8989 m). Those
+        # readings wrecked the target estimate and the explore sweep's choice.
+        dist = self.dist_gate.check(best.distance)
+        if dist is None and best.distance is not None:
+            self.rejected_dists += 1
+        return best.arrow, dist, best.center
 
     def read_target_distance(self):
         _, d, _ = self.target_status(self.screen.grab())
@@ -253,6 +262,7 @@ class NavigationRunner:
         self.navigator.reset()
         self.planner_active = False
         self.min_dist_seen = self.last_valid_dist = target["distance"]
+        self.dist_gate.reset(target["distance"])
         self.close_read_count = 0
 
         run_id = self.db.start_run(self.planet, self.player[0] or 0, self.player[2] or 0, 0, 0)

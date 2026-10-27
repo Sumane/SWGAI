@@ -132,15 +132,24 @@ class SimKeys:
 
 
 class SimHud:
-    def __init__(self, world):
+    def __init__(self, world, misread_every=0):
         self.w = world
+        self.misread_every = misread_every   # every Nth distance gets an extra digit, like the real OCR
+        self._n = 0
+
+    def _distance(self):
+        d = self.w.dist()
+        self._n += 1
+        if self.misread_every and self._n % self.misread_every == 0:
+            return int("9" + str(d)) if self._n % 2 else int(str(d)[0] + str(d))
+        return d
 
     def read_coords(self, frame):
         x, z = self.w.reported_position()
         return round(x, 1), 0.0, round(z, 1)
 
     def waypoints(self, frame, should_stop=None):
-        return iter([Waypoint("Theed Starport", self.w.dist(), (0, 0), self.w.arrow())])
+        return iter([Waypoint("Theed Starport", self._distance(), (0, 0), self.w.arrow())])
 
 
 class SimScreen:
@@ -223,8 +232,10 @@ def test_mounted_bot_dismounts_at_a_wall_and_only_blocks_on_foot(tmp_path, monke
     assert world.dist() <= s.nav["stop_dist"]
 
 
-@pytest.mark.parametrize("target", [(2900.0, 0.0), (-1500.0, 2600.0)], ids=["2.9km-east", "3km-north-west"])
-def test_far_waypoint_is_reached(tmp_path, monkeypatch, target):
+@pytest.mark.parametrize("target,misread_every", [((2900.0, 0.0), 0), ((-1500.0, 2600.0), 0),
+                                                  ((900.0, -400.0), 7)],
+                         ids=["2.9km-east", "3km-north-west", "1km-with-ocr-misreads"])
+def test_far_waypoint_is_reached(tmp_path, monkeypatch, target, misread_every):
     """
     Marc's first in-game drive: a waypoint ~2.9 km away, swoop with lagging
     coordinates. v0.20 projected the target once from a single arrow=N reading
@@ -241,7 +252,7 @@ def test_far_waypoint_is_reached(tmp_path, monkeypatch, target):
     world = World(clock, target=target, right_is_clockwise=True, mounted_lag_s=0.5)
     s = load_settings(local_file="none.yaml")
     s.raw["paths"]["nav_db"] = str(tmp_path / "nav.db")
-    r = NavigationRunner(s, hud=SimHud(world), keys=SimKeys(world, clock),
+    r = NavigationRunner(s, hud=SimHud(world, misread_every), keys=SimKeys(world, clock),
                          screen=SimScreen(world, clock))
     r.vel_tracker._clock = clock.time
     r.should_stop = lambda: clock.t > 1000 + 600

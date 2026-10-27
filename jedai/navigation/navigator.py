@@ -260,7 +260,12 @@ class Navigator:
         if est is None:
             return False
         self.target_wx, self.target_wz = est
-        if not (force_goal or self.estimator.confident(self._confident_sigma(dist))):
+        # Once D* is running (even if it was started early because the bot got
+        # stuck), keep its goal on the latest estimate. FIX: a goal set from an
+        # early, poor estimate was never corrected unless the estimate became
+        # "confident", so D* kept driving to the wrong place.
+        if not (force_goal or self.r.planner_active or
+                self.estimator.confident(self._confident_sigma(dist))):
             return False
         goal_ok = self.r.planner_active and self.r.planner.goal is not None
         if goal_ok and self._goal_xy is not None:
@@ -434,7 +439,18 @@ class Navigator:
         self._prev_pos = start
         self._behind_turn = 0
 
+        if self.heading is None:
+            # FIX: with no heading, steering returns "straight" and the bot drove
+            # 50-80 m in whatever direction it faced. A short pulse gives a heading.
+            self._prev_pos = start
+            keys.tap("FORWARD", 0.4)
+            p = self.r.read_position()
+            if p is not None:
+                self.update_heading(p)
+                start = p
+                d = math.hypot(wx - start[0], wz - start[1])
         target_cell = self._cell_of(wx, wz)
+        travelled, last_p = 0.0, start
         holding = False
         mode = None              # None = forward/turning, "back" = reversing
         deadline = time.time() + duration
@@ -446,9 +462,13 @@ class Navigator:
             if p is None:
                 continue
             final_pos = p
+            travelled += math.hypot(p[0] - last_p[0], p[1] - last_p[1])
+            last_p = p
             if mode != "back":
                 self.update_heading(p)
             left = math.hypot(wx - p[0], wz - p[1])
+            if travelled > d + 15.0:
+                break        # wandering or overshooting: give up on this cell
             # FIX: stop at the cell instead of holding FORWARD for the full
             # duration (a 20 m leg became 100 m on a swoop)
             if left <= max(1.5, 0.2 * d) or (self._cell_of(*p) == target_cell and d - left >= 1.0):
