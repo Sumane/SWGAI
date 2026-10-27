@@ -169,7 +169,10 @@ WALL = ((140, -60, 150, 60),)
     ((), True, -1, True),            # X east / Z north world, correct setting
     ((), False, 1, True),            # mirrored world, original setting
     (WALL, True, -1, True),          # wall in the way
-    ((), True, 1, False),            # WRONG setting: must not arrive (shows why it matters)
+    # WRONG setting. v0.20 never arrived like this. Now it still does: until D*
+    # takes over the bot follows the arrow, which is screen-relative and doesn't
+    # use the setting at all. The setting still matters for D* steering.
+    ((), True, 1, True),
 ], ids=["cw-open", "ccw-open", "cw-wall", "wrong-sign"])
 def test_drives_to_waypoint(tmp_path, monkeypatch, walls, clockwise, sign, arrives):
     clock = Clock()
@@ -260,3 +263,58 @@ def test_far_waypoint_is_reached(tmp_path, monkeypatch, target, misread_every):
     assert world.dist() <= s.nav["stop_dist"], f"ended {world.dist()}m away"
     est = (r.navigator.target_wx, r.navigator.target_wz)
     assert math.hypot(est[0] - target[0], est[1] - target[1]) < 30
+
+
+def _city(seed, n=45):
+    import random
+    rnd = random.Random(seed)
+    walls = []
+    for _ in range(n):
+        x, z = rnd.uniform(60, 700), rnd.uniform(-250, 250)
+        w, h = rnd.uniform(15, 60), rnd.uniform(15, 60)
+        if math.hypot(x, z) < 40 or math.hypot(x - 800, z) < 40:
+            continue
+        walls.append((x, z, x + w, z + h))
+    return tuple(walls)
+
+
+class SlowScreen(SimScreen):
+    """~2 s per tick like the real HUD reading (two grabs per tick)."""
+    def grab(self):
+        self.c.sleep(1.0)
+        self.w.step()
+        return np.zeros((2, 2, 3), np.uint8)
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_city_with_slow_vision_does_not_run_off(tmp_path, monkeypatch, seed):
+    """
+    Marc's second and third in-game drives (Theed): with ~2 s vision ticks the
+    old cell-by-cell recalibration overshot, marked clear cells as walls, and
+    the bot kept heading away from the waypoint. Buildings, 2 s ticks, coord
+    lag and an OCR misread every 6th distance: it must get there without ever
+    ending up much further away than it started.
+    """
+    clock = Clock()
+    for mod in (nav_mod, runner_mod):
+        monkeypatch.setattr(mod.time, "time", clock.time)
+        monkeypatch.setattr(mod.time, "sleep", clock.sleep)
+    answers = iter(["", "0"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    world = World(clock, target=(800.0, 0.0), walls=_city(seed), right_is_clockwise=True,
+                  mounted_lag_s=0.5)
+    worst = [0]
+    step = world.step
+    def tracked():
+        step()
+        worst[0] = max(worst[0], world.dist())
+    world.step = tracked
+    s = load_settings(local_file="none.yaml")
+    s.raw["paths"]["nav_db"] = str(tmp_path / "nav.db")
+    r = NavigationRunner(s, hud=SimHud(world, misread_every=6), keys=SimKeys(world, clock),
+                         screen=SlowScreen(world, clock))
+    r.vel_tracker._clock = clock.time
+    r.should_stop = lambda: clock.t > 1000 + 900
+    r.navigate()
+    assert world.dist() <= s.nav["stop_dist"], f"ended {world.dist()}m away"
+    assert worst[0] <= 800 + 100, f"got {worst[0]}m away (started 800m)"

@@ -38,3 +38,14 @@ def test_recovers_when_the_old_reading_was_the_wrong_one():
         c.t = 0.5 * (i + 1)
         out = g.check(v)
     assert out == 796 and g.last == 796
+
+
+def test_systematic_misreads_need_to_hold_before_they_are_believed():
+    """In-game: 887 read as 8987/8989/8985 several reads in a row, between good reads."""
+    c = Clock()
+    g = MotionGate(10.0, 10.5, recover_secs=8.0, clock=c)
+    g.reset(880)
+    for i, v in enumerate((8989, 8985, 8987, 878, 8986, 8984, 8983, 876)):
+        c.t = 1.0 * (i + 1)
+        out = g.check(v)
+        assert (out is None) == (v > 5000), (v, out)

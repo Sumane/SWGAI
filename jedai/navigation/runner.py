@@ -64,7 +64,11 @@ class NavigationRunner:
         # Drop readings that would need the bot to move faster than its vehicle
         self.coord_gate = MotionGate(self.cfg["max_coord_jump"] / 5.0, lambda: self.max_speed,
                                      clock=lambda: time.time())
-        self.dist_gate = MotionGate(10.0, lambda: self.max_speed, clock=lambda: time.time())
+        # Distance misreads are systematic (887 -> 8987 several times in a row),
+        # so a jump is only believed once it has held for 8 s with nothing
+        # plausible in between.
+        self.dist_gate = MotionGate(10.0, lambda: self.max_speed, recover_secs=8.0,
+                                    clock=lambda: time.time())
         self.rejected_dists = 0
 
     # =========================================================================
@@ -262,7 +266,7 @@ class NavigationRunner:
         self.navigator.reset()
         self.planner_active = False
         self.min_dist_seen = self.last_valid_dist = target["distance"]
-        self.dist_gate.reset(target["distance"])
+        self.dist_gate.reset()        # the list's reading may itself be a misread
         self.close_read_count = 0
 
         run_id = self.db.start_run(self.planet, self.player[0] or 0, self.player[2] or 0, 0, 0)

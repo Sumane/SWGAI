@@ -22,7 +22,7 @@ import time
 
 class MotionGate:
     def __init__(self, base_tol: float, max_speed, slack: float = 1.5,
-                 recover_after: int = 3, clock=time.time):
+                 recover_after: int = 3, recover_secs: float = 0.0, clock=time.time):
         """
         base_tol: always-allowed change (reading noise, lag), same units as the value
         max_speed: number, or a function returning the current max speed (units/s)
@@ -31,6 +31,7 @@ class MotionGate:
         self._max_speed = max_speed if callable(max_speed) else (lambda: max_speed)
         self.slack = slack
         self.recover_after = recover_after
+        self.recover_secs = recover_secs    # rejected readings must keep agreeing this long
         self.clock = clock
         self.reset()
 
@@ -60,12 +61,19 @@ class MotionGate:
             return value
         self.rejected += 1
         self.pending.append((value, now))
-        self.pending = self.pending[-self.recover_after:]
-        if len(self.pending) >= self.recover_after and all(
-                self._diff(v1, v0) <= self._allowed(t1 - t0)
-                for (v0, t0), (v1, t1) in zip(self.pending, self.pending[1:])):
-            # several readings agree with each other: the old one was wrong
+        # newest run of rejected readings that agree with each other
+        chain = [self.pending[-1]]
+        for v0, t0 in reversed(self.pending[:-1]):
+            v1, t1 = chain[-1]
+            if self._diff(v1, v0) > self._allowed(t1 - t0):
+                break
+            chain.append((v0, t0))
+        if len(chain) >= self.recover_after and now - chain[-1][1] >= self.recover_secs:
+            # several readings agree with each other (and nothing plausible
+            # came in between): the old one was wrong
             self.last, self.t_last = value, now
             self.pending = []
             return value
+        if len(self.pending) > 50:
+            self.pending = self.pending[-50:]
         return None

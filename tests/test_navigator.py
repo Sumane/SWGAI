@@ -172,12 +172,26 @@ def test_clear_marks_reach_planner(nav):
     assert nav.r.planner._state((2, 0)) == CLEAR
 
 
-def test_attempt_cell_marks_blocked_when_no_progress(nav, monkeypatch):
+def test_attempt_cell_never_marks_blocked(nav, monkeypatch):
+    """In-game: probes too short to get moving said "moved 0.0m" and walled in clear cells."""
     monkeypatch.setattr("time.sleep", lambda s: None)
     nav.r.read_position = lambda: (0.0, 0.0)          # bot never moves
     nav.heading = (0.95, 0.31)                         # already facing the cell
     ok, _ = nav.attempt_cell((0, 0), 7.5, 2.5, duration=0.01)
-    assert not ok and nav.r.db.get_state("naboo", 7.5, 2.5) == BLOCKED
+    assert not ok and nav.r.db.get_state("naboo", 7.5, 2.5) != BLOCKED
+
+
+def test_unstick_backs_off_turns_and_goes(nav, monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    positions = iter([(0.0, 0.0), (0.0, -10.0)])
+    nav.r.read_position = lambda: next(positions, (0.0, -10.0))
+    nav.heading = (1.0, 0.0)
+    nav._last_arrow = "E"                              # target on the right
+    assert nav.do_recal((0, 0)) is True and nav.state == Navigator.MOVING
+    names = [n for n, _ in nav.r.keys.log]
+    assert names.index("key_down") < names.index("tap")          # back off before turning
+    assert ("tap", ("RIGHT", 0.45)) in nav.r.keys.log            # 45° at 100°/s
+    assert nav.heading == pytest.approx((0.0, -1.0))             # measured from the move
 
 
 # --- mounted vs on foot ------------------------------------------------------

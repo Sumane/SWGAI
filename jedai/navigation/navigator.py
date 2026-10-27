@@ -44,7 +44,7 @@ import time
 from collections import deque
 
 from .grid_db import BLOCKED, CLEAR
-from .target_estimator import TargetEstimator
+from .target_estimator import ARROW_DEG, TargetEstimator
 
 
 class Navigator:
@@ -147,7 +147,9 @@ class Navigator:
             dx = pos[0] - self._prev_pos[0]
             dz = pos[1] - self._prev_pos[1]
             d = math.hypot(dx, dz)
-            if d >= 1.0 and during_clean_movement:
+            # FIX: coordinates are whole metres, so a 1 m move only gives the
+            # heading to the nearest 45°. Wait for a few metres.
+            if d >= float(self.cfg.get("heading_min_move_m", 3.0)) and during_clean_movement:
                 h = (dx / d, dz / d)
                 self._heading_buffer.append(h)
                 self.heading = h
@@ -533,8 +535,11 @@ class Navigator:
             # about the cell: don't mark it. BLOCKED = pushed and couldn't move.
             print(f"[CELL] ({wx:.0f},{wz:.0f}) not reached (moved {progress:.1f}m), not marked{tag}")
             return False, final_pos
-        self.mark(wx, wz, BLOCKED, replan_now=True)
-        print(f"[CELL] ({wx:.0f},{wz:.0f}) BLOCKED (moved {progress:.1f}m){tag}")
+        # FIX: never mark the target BLOCKED from here. With ~2 s position
+        # reads, "didn't move" mostly meant "hadn't got going yet", and clear
+        # cells the bot had just come through were marked as walls. Real
+        # obstacles are marked by the main loop when the bot is pushing into one.
+        print(f"[CELL] ({wx:.0f},{wz:.0f}) not reached (moved {progress:.1f}m), not marked{tag}")
         return False, final_pos
 
     def align_to_direction(self, ndx, ndz, timeout=3.0):
@@ -655,8 +660,10 @@ class Navigator:
           "RECAL"       runner should call do_recal()
           "DISMOUNT"    stuck twice in the same place on a vehicle: get off
         """
+        self._last_arrow = arrow
         if self.state == self.MOVING:
             self.update_heading(pos, during_clean_movement=True)
+            self._check_heading_against_arrow(pos, arrow)
 
         self.mark_clear_interpolated(pos, speed_pct)
 
@@ -696,6 +703,37 @@ class Navigator:
         if self.state == self.RECALIBRATING:
             return "RECAL"
         return 0
+
+    _last_arrow = None
+    _heading_warned = 0.0
+
+    def _check_heading_against_arrow(self, pos, arrow):
+        """
+        The arrow says where the target is relative to the way the bot faces.
+        With a good target estimate that gives the facing, to within one sector.
+        If the heading from position deltas disagrees by more than ~70°, it's
+        wrong (lag, sliding, a reversed move): use the arrow's instead.
+        FIX: the heading was sometimes 90-180° out and D* steered off with it.
+        """
+        if (pos is None or self.heading is None or arrow not in ARROW_DEG
+                or not self.estimator.confident(self._confident_sigma(self._est_dist_at_last or 0))
+                or self.target_wx is None):
+            return
+        bearing = math.atan2(self.target_wz - pos[1], self.target_wx - pos[0])
+        if math.hypot(self.target_wx - pos[0], self.target_wz - pos[1]) < 30:
+            return
+        # arrow = clockwise-from-facing when right_turn_sign is -1
+        sign = int(self.cfg.get("right_turn_sign", -1))
+        facing = bearing - sign * math.radians(ARROW_DEG[arrow])
+        cur = math.atan2(self.heading[1], self.heading[0])
+        err = (cur - facing + math.pi) % (2 * math.pi) - math.pi
+        if abs(err) > math.radians(70):
+            # (Also normal while sliding along a wall: moving sideways, facing the wall.)
+            now = time.time()
+            if now - self._heading_warned > 10:
+                print(f"\n[NAV] Heading disagrees with the arrow by {abs(math.degrees(err)):.0f}° — using the arrow")
+                self._heading_warned = now
+            self._seed_heading((math.cos(facing), math.sin(facing)))
 
     def _grinding(self, pos, now=None):
         """
@@ -787,34 +825,67 @@ class Navigator:
 
     def do_recal(self, pos):
         """
-        Try the next candidate cell.
-        Returns True (moved, resume), False (all failed, explore), None (keep going).
+        Get unstuck: back off, turn, drive on. Returns True (resume MOVING).
+
+        FIX (second in-game drive): this used to probe the 8 neighbouring 5 m
+        cells one by one. With ~2 s between position reads the bot covers 10-30 m
+        per read, so probes overshot by 15-25 m or, when a probe was too short to
+        get moving, "moved 0.0m" and marked a clear cell BLOCKED. Free cells the
+        bot had just walked through were marked as walls all round it, D* routed
+        round the false walls, and the bot went the wrong way. A fixed manoeuvre
+        doesn't need fast position reads, and it marks nothing it didn't hit.
         """
-        if not self._recal_candidates:
-            self.state = self.MOVING
-            return False
+        c, keys = self.cfg, self.r.keys
+        n = self._recal_cycles                       # times stuck here before
+        side = self._unstick_side(pos, n)
+        angle = min(45.0 * (1 + n // 2), 135.0)      # widen the turn if it keeps happening
+        turn_rate = float(getattr(self.r, "turn_rate_deg_s", None) or c.get("turn_rate_deg_s", 100.0))
+        back_s = float(c.get("unstick_back_secs", 1.0))
+        go_s = float(c.get("unstick_forward_secs", 2.0))
+        print(f"\n[UNSTICK] back {back_s:.1f}s, turn {'RIGHT' if side > 0 else 'LEFT'} "
+              f"{angle:.0f}°, forward {go_s:.1f}s (stuck {n + 1}x here)")
 
-        score, wx, wz, node = self._recal_candidates.pop(0)
-        self._recal_visited.add(node)
-        print(f"\n[RECAL] Attempting ({wx:.0f},{wz:.0f}) score={score:.1f}")
-        success, final_pos = self.attempt_cell(pos, wx, wz)
+        keys.stop_movement()
+        keys.key_up("FORWARD")
+        keys.key_down("BACK"); time.sleep(back_s); keys.key_up("BACK")
+        keys.tap("RIGHT" if side > 0 else "LEFT", angle / turn_rate)
+        if self.heading is not None:
+            # dead-reckon the new facing: RIGHT turns by right_turn_sign in X/Z
+            a = math.radians(angle) * side * int(c.get("right_turn_sign", -1))
+            hx, hz = self.heading
+            self._seed_heading((hx * math.cos(a) - hz * math.sin(a), hx * math.sin(a) + hz * math.cos(a)))
+        start = self.r.read_position()
+        keys.key_down("FORWARD"); time.sleep(go_s); keys.key_up("FORWARD")
+        end = self.r.read_position()
+        if start is not None and end is not None:
+            dx, dz = end[0] - start[0], end[1] - start[1]
+            d = math.hypot(dx, dz)
+            if d >= 3.0:
+                self._seed_heading((dx / d, dz / d))     # measured, better than reckoned
+                self.mark(end[0], end[1], CLEAR)
+            fd = self.r.read_target_distance()
+            if fd is not None:
+                self.observe_target(end, fd, None)
+        self.state = self.MOVING
+        self._pos_hist = deque()
+        self._stop_ticks = 0
+        self._prev_pos = end
+        if self.r.planner_active and end is not None:
+            self.r.planner.update_start(end[0], end[1])
+        return True
 
-        if success:
-            self.state = self.MOVING
-            self._pos_hist = deque()
-            if self.r.planner_active:
-                self.r.planner.update_start(wx, wz)
-            if final_pos is not None:
-                fd = self.r.read_target_distance()
-                if fd is not None:
-                    self.observe_target(final_pos, fd, None)
-            return True
-
-        if not self._recal_candidates:
-            if self._recal_cycles >= 4:
-                print(f"\n[RECAL] {self._recal_cycles} cycles — forcing explore")
-                self._recal_cycles = 0
-                self._recal_visited.clear()
-            self.state = self.MOVING
-            return False
-        return None
+    def _unstick_side(self, pos, n):
+        """+1 = turn right, -1 = left: towards the D* path, else the arrow, else alternate."""
+        if self.r.planner_active and self.heading is not None and pos is not None:
+            wp = self.lookahead_waypoint()
+            if wp is not None and math.hypot(wp[0] - pos[0], wp[1] - pos[1]) > 1.0:
+                side = 1 if self._turn_cross(wp[0] - pos[0], wp[1] - pos[1]) >= 0 else -1
+                return side if n % 2 == 0 else -side   # tried that side last time: other way
+        a = self._last_arrow
+        if a in ("NE", "E", "SE", "S"):
+            side = 1
+        elif a in ("NW", "W", "SW"):
+            side = -1
+        else:
+            side = 1
+        return side if n % 2 == 0 else -side

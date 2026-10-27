@@ -84,6 +84,10 @@ navigation:
   stop_debounce: 3              # consecutive stopped ticks before recalibrating
   steer_deadband: 0.15          # sin(angle) below which the bot drives straight
   steer_lookahead_cells: 3      # steer at a point this many cells along the D* path, not the next cell
+  turn_rate_deg_s: 100.0        # how fast LEFT/RIGHT turn (scan_turn_time 0.9 s x 4 steps ~ 360°)
+  unstick_back_secs: 1.0        # stuck: reverse this long,
+  unstick_forward_secs: 2.0     #   turn 45° (wider if it keeps happening), drive this long
+  heading_min_move_m: 3.0       # heading from moves at least this long (coords are whole metres)
   grind_window_s: 6.0           # moving but covered less than grind_min_m in this long = stuck
   grind_min_m: 8.0              #   (the game slides you along walls, so speed alone misses it)
 
@@ -107,7 +111,8 @@ navigation:
   mounted_mapping: clear_only   # clear_only (default) | none = nothing while mounted | all = old behaviour
   foot_vehicle: running         # profile to switch to after dismounting
   dismount_after_stuck: 2       # stuck this many times in the same place on a vehicle -> dismount
-  stuck_radius_m: 15.0          # "same place" = within this distance of the last stuck point
+  stuck_radius_m: 40.0          # "same place" = within this distance of the last stuck point
+                                # (an unstick manoeuvre itself moves the bot 10-30 m)
   dismount_method: command      # command: types dismount_command in chat | key: presses dismount_key
   dismount_command: /dismount
   dismount_key: ""              # e.g. the toolbar key you put your vehicle on
