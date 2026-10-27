@@ -70,7 +70,7 @@ class NavigationRunner:
         self.max_speed = cfg["max"]
         self.mounted = key not in self.cfg["on_foot_vehicles"]
         self.vel_tracker.reset()
-        mode = "mounted, map read-only" if self.mounted else "on foot, mapping"
+        mode = "mounted: maps clear only" if self.mounted else "on foot: maps clear + blocked"
         print(f"   🏍  Vehicle: {key} | max: {self.max_speed} m/s | {mode}")
 
     def dismount(self):

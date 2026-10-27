@@ -122,27 +122,15 @@ I couldn't verify SWG's handedness from here, so it's now a setting
 
 ## Mounted vs on foot (added 27 Oct)
 
-- **On a vehicle the grid map is read-only.** Lag puts marks in the wrong cells. D\* still steers with the map it has.
-- **Stuck twice in the same place on a vehicle → dismount.** "Same place" is within `stuck_radius_m` (15 m). The bot then switches to the `running` profile, and every mark is written from then on.
+**The rule: CLEAR from anything, BLOCKED only on foot.**
+
+- **Mounted:** CLEAR is recorded as normal. A cell the bot drove through is clear however fast it went, and lag only shifts which already-driven cell gets the mark.
+- **On foot only:** BLOCKED is recorded. A vehicle takes metres to start and stop and slides along walls, so it can't say which cell stopped it and can carry straight past the only opening. On foot it stops where it hits, so the mark is trustworthy. Blocked cells are what D\* plans around, so they need to be right.
+- **Stuck twice within `stuck_radius_m` (15 m) on a vehicle → dismount.** The bot switches to the `running` profile; from then on, each confirmed blocked cell gives D\* a better suggested route.
 - **How it dismounts:** by default it types `/dismount` in chat (Enter, text, Enter). Alternatively, set `dismount_method: key` and `dismount_key` to a toolbar key. The controller has a new `TYPE` command for this.
-- **`mounted_mapping`:**
-  - `none`: read-only, the default and your rule
-  - `clear_only`: keep CLEAR marks, drop BLOCKED marks
-  - `all`: the old behaviour
+- **`mounted_mapping`:** `clear_only` (the default), `none` (nothing while mounted), or `all` (the old behaviour, for comparison).
 
-**Simulator sweep.** I added coordinate lag to the simulator: on a vehicle the HUD reports where the bot was 0.2–0.7 s ago. Across 4 scenarios × 4 lag values:
-
-| Mode | Arrived | Average distance driven when it arrived |
-|---|---:|---:|
-| `all` (old) | 11/16 | 4.6 km |
-| `none` + dismount (default) | 8/16 | 3.0 km |
-| `clear_only` + dismount | 11/16 | 5.0 km |
-
-Read-only arrives least often, mostly because it reaches the stuck point with an empty map, so there's no clear trail back out of a dead end. When it does arrive, it takes the shortest routes.
-
-The reasoning for `clear_only`: lag corrupts BLOCKED marks (the obstacle gets recorded on ground already driven over), but a lagged CLEAR mark is still a cell the bot really passed through.
-
-The simulator has no momentum on turns and no real terrain, so treat this as a hint and settle it in-game.
+The simulator can't judge this rule yet. It models coordinate lag but not vehicle momentum (starting and stopping distance, sliding along walls), which is the reason for the rule. Adding momentum would make it useful for tuning `dismount_after_stuck` and `stuck_radius_m`.
 
 ## Known issues (not changed: they need in-game testing)
 

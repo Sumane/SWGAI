@@ -144,22 +144,29 @@ def test_attempt_cell_marks_blocked_when_no_progress(nav, monkeypatch):
 
 # --- mounted vs on foot ------------------------------------------------------
 
-def test_no_mapping_while_mounted(nav):
+def test_mounted_maps_clear_but_not_blocked(nav):
     nav.r.mounted = True
     nav.mark_clear_interpolated((0, 0), 1.0, now=10.0)
     nav.mark_clear_interpolated((20, 0), 1.0, now=11.0)
-    assert nav.r.db.get_stats("naboo") == {}
-    assert nav.mark(30, 30, BLOCKED, replan_now=True) is False
+    assert nav.r.db.get_state("naboo", 10, 0) == CLEAR          # driven through = clear
+    assert nav.mark(30, 30, BLOCKED, replan_now=True) is False  # can't confirm on a vehicle
+    assert nav.r.db.get_state("naboo", 30, 30) != BLOCKED
     nav.r.mounted = False
     assert nav.mark(30, 30, BLOCKED) is True
     assert nav.r.db.get_state("naboo", 30, 30) == BLOCKED
+
+
+def test_mounted_mapping_none_option(nav):
+    nav.r.mounted = True
+    nav.cfg = dict(nav.cfg, mounted_mapping="none")
+    assert nav.mark(10, 0, CLEAR) is False
 
 
 def test_stuck_twice_same_place_on_vehicle_dismounts(nav):
     nav.r.mounted = True
     nav.heading = (1.0, 0.0)
     assert nav._enter_recal((100, 100)) == "STOP"           # first time: recalibrate
-    assert nav.r.db.get_stats("naboo") == {}                 # ...without mapping
+    assert nav.r.db.get_state("naboo", 105, 100) != BLOCKED  # ...without marking a wall
     assert nav._enter_recal((105, 102)) == "DISMOUNT"        # second time within 15m
 
 

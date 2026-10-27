@@ -18,11 +18,11 @@ The panel arrow is used only for the initial align, target estimation, and
 as a steering fallback before D* has a path. It never fights D*.
 
 Mounted vs on foot:
-  On a vehicle the grid map is NOT updated (vehicle inertia makes the logged
-  coordinates lag the real position, so marks land in the wrong cells). D*
-  still steers with the map it already has. If the bot gets stuck twice in
-  the same place while mounted, tick() returns "DISMOUNT"; once on foot every
-  mark is written to the map and the planner.
+  CLEAR is recorded whether mounted or not: a cell the bot drove through is
+  clear. BLOCKED is only recorded on foot: a vehicle takes metres to stop and
+  slides along walls, so it can't tell which cell stopped it. If the bot gets
+  stuck twice in the same place while mounted, tick() returns "DISMOUNT"; on
+  foot, blocked cells are confirmed and D* plans around them.
 
 The navigator talks to the game only through `runner`, which must provide:
     runner.keys            KeyClient (key_down, key_up, tap, stop_movement)
@@ -113,10 +113,9 @@ class Navigator:
         Returns True if the cell was recorded.
         """
         if self.mounted:
-            # mounted_mapping: "none" = map is read-only on a vehicle (default);
-            # "clear_only" = keep CLEAR marks (lagged positions were still driven
-            # through) but drop BLOCKED marks (those land behind the real obstacle)
-            mode = self.cfg.get("mounted_mapping", "none")
+            # mounted_mapping: "clear_only" (default) = keep CLEAR, drop BLOCKED;
+            # "none" = nothing while mounted; "all" = old behaviour
+            mode = self.cfg.get("mounted_mapping", "clear_only")
             if mode == "none" or (mode == "clear_only" and state != CLEAR):
                 return False
         if replan_now and self.r.planner_active:

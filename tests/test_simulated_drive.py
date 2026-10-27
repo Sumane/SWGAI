@@ -13,6 +13,7 @@ import pytest
 from jedai.config import load_settings
 from jedai.navigation import navigator as nav_mod, runner as runner_mod
 from jedai.navigation.runner import NavigationRunner
+from jedai.navigation.grid_db import BLOCKED
 from jedai.perception.hud import Waypoint
 
 ARROWS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
@@ -176,7 +177,7 @@ def test_drives_to_waypoint(tmp_path, monkeypatch, walls, clockwise, sign, arriv
         assert done == [(0,)]
 
 
-def test_mounted_bot_dismounts_at_a_wall_and_only_maps_on_foot(tmp_path, monkeypatch):
+def test_mounted_bot_dismounts_at_a_wall_and_only_blocks_on_foot(tmp_path, monkeypatch):
     clock = Clock()
     for mod in (nav_mod, runner_mod):
         monkeypatch.setattr(mod.time, "time", clock.time)
@@ -197,7 +198,7 @@ def test_mounted_bot_dismounts_at_a_wall_and_only_maps_on_foot(tmp_path, monkeyp
     real_mark = r.navigator.mark
     def spy(wx, wz, state, replan_now=False):
         ok = real_mark(wx, wz, state, replan_now)
-        if ok and r.mounted:
+        if ok and r.mounted and state == BLOCKED:
             mapped_while_mounted.append((wx, wz))
         return ok
     r.navigator.mark = spy
