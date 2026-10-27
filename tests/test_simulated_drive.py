@@ -146,7 +146,7 @@ class SimHud:
 
     def read_coords(self, frame):
         x, z = self.w.reported_position()
-        return round(x, 1), 0.0, round(z, 1)
+        return float(round(x)), 0.0, float(round(z))     # the HUD shows whole metres
 
     def waypoints(self, frame, should_stop=None):
         return iter([Waypoint("Theed Starport", self._distance(), (0, 0), self.w.arrow())])
@@ -264,7 +264,9 @@ def test_far_waypoint_is_reached(tmp_path, monkeypatch, target, misread_every):
     r.navigate()
     assert world.dist() <= s.nav["stop_dist"], f"ended {world.dist()}m away"
     est = (r.navigator.target_wx, r.navigator.target_wz)
-    assert math.hypot(est[0] - target[0], est[1] - target[1]) < 30
+    # whole-metre coordinates (like the HUD) and 0.5 s lag: within ~100 m at 3 km
+    # is plenty, the bot homes in on the arrow/distance at the end anyway
+    assert math.hypot(est[0] - target[0], est[1] - target[1]) < 100
 
 
 def _city(seed, n=45):

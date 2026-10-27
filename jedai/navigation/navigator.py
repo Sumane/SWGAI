@@ -90,6 +90,7 @@ class Navigator:
         self._escape = None                # {"until", "target", "why"} after an unstick
         self._backtracks = 0
         self._pushes = []                  # (pos, heading) each time it got stuck here
+        self._stuck_hist = deque(maxlen=200)   # (time, pos, heading) of every stuck
 
     @property
     def mounted(self) -> bool:
@@ -125,6 +126,14 @@ class Navigator:
         planner is told and replans on its next update (FIX: D* cache miss).
         Returns True if the cell was recorded.
         """
+        if state == CLEAR and self._near_cell_edge(wx, wz) and \
+                self.r.db.get_state(self.r.planet, wx, wz) == BLOCKED:
+            # FIX (simulator, then explains the in-game flip-flopping): a bot
+            # pressed against a wall is often reported just inside the wall's
+            # 5 m cell (whole-metre coordinates, walls not on cell lines). Marking
+            # that CLEAR because "it's standing there" erased the wall every time.
+            # A blocked cell is only cleared from its middle.
+            return False
         if state == BLOCKED and not (self.mounted and self.cfg.get("mounted_mapping", "clear_only") != "all"):
             self._ev("blocked", cell=(wx, wz))
         if self.mounted:
@@ -382,6 +391,11 @@ class Navigator:
     _tick_dt = 0.5           # seconds per main-loop tick (measured)
     _last_tick_t = None
     steer_angle_deg = 0.0
+
+    def _near_cell_edge(self, wx, wz, margin=1.5):
+        fx = wx - math.floor(wx / self.cell) * self.cell
+        fz = wz - math.floor(wz / self.cell) * self.cell
+        return min(fx, self.cell - fx, fz, self.cell - fz) < margin
 
     def _cell_of(self, wx, wz):
         return (int(math.floor(wx / self.cell)), int(math.floor(wz / self.cell)))
@@ -801,7 +815,8 @@ class Navigator:
         facing = bearing - sign * math.radians(ARROW_DEG[arrow])
         cur = math.atan2(self.heading[1], self.heading[0])
         err = (cur - facing + math.pi) % (2 * math.pi) - math.pi
-        if abs(err) > math.radians(70):
+        # The arrow pins the facing to its 45° sector (±22.5°) plus slack
+        if abs(err) > math.radians(float(self.cfg.get("arrow_heading_tolerance_deg", 35.0))):
             # (Also normal while sliding along a wall: moving sideways, facing the wall.)
             now = time.time()
             if now - self._heading_warned > 10:
@@ -878,27 +893,29 @@ class Navigator:
             # The first point along the heading that's in a different cell: the
             # cell it's standing in is walkable, and marking it blocked just got
             # it re-cleared as the bot moved off (and the wall forgotten).
-            own = self._cell_of(*pos)
-            for k in (1.0, 2.0, 3.0, 4.0, 5.0):
-                bx, bz = pos[0] + self.heading[0] * k, pos[1] + self.heading[1] * k
-                if self._cell_of(bx, bz) != own:
-                    break
-            self.mark(bx, bz, BLOCKED, replan_now=True)
+            # Mark where D* was sending it (that's what was blocked, and marking it
+            # forces a new plan). The heading is a worse guess: it's noisy, and it
+            # follows the slide along the wall rather than the push into it.
+            push = self._push_dir(pos) or self.heading
+            self._mark_beside(pos[0], pos[1], push[0], push[1])
 
         # FIX: guard pos=None (the original crashed here if coords weren't read)
         if pos is not None:
-            if (self._recal_origin is None or
-                    math.hypot(pos[0] - self._recal_origin[0], pos[1] - self._recal_origin[1])
-                    > self.cfg["stuck_radius_m"]):
-                self._recal_cycles = 0
-                self._recal_visited = set()
-                self._recal_origin = pos
-            else:
-                self._recal_cycles += 1
-            if self._recal_cycles == 0:
-                self._pushes = []
-            if self.heading is not None:
-                self._pushes.append((pos, self.heading))
+            # FIX (simulator, dead end on a swoop): "same place" used to mean "near
+            # the LAST stuck point", so sliding corner to corner (A, B, A, B...)
+            # reset the count every time and it never dismounted. Count every
+            # stuck point within stuck_radius_m in the last few minutes.
+            now = time.time()
+            win = float(self.cfg.get("stuck_window_s", 300.0))
+            rad = float(self.cfg["stuck_radius_m"])
+            self._stuck_hist = deque(((t, p, h) for t, p, h in self._stuck_hist if now - t <= win),
+                                     maxlen=200)
+            self._stuck_hist.append((now, pos, self.heading))
+            near = [(p, h) for _, p, h in self._stuck_hist
+                    if math.hypot(p[0] - pos[0], p[1] - pos[1]) <= rad]
+            self._recal_cycles = len(near) - 1
+            self._recal_origin = pos
+            self._pushes = [(p, h) for p, h in near if h is not None]
 
             stuck_count = self._recal_cycles + 1
             if self.mounted and stuck_count >= self.cfg["dismount_after_stuck"]:
@@ -941,6 +958,7 @@ class Navigator:
         keys.stop_movement()
         keys.key_up("FORWARD")
         keys.key_down("BACK"); time.sleep(back_s); keys.key_up("BACK")
+        self._prev_pos = None
         keys.tap("RIGHT" if side > 0 else "LEFT", angle / turn_rate)
         if self.heading is not None:
             # dead-reckon the new facing: RIGHT turns by right_turn_sign in X/Z
@@ -985,7 +1003,7 @@ class Navigator:
         (A building is passed in one go instead of one 5 m cell per bump.)
         """
         c, keys = self.cfg, self.r.keys
-        into = self.heading                                   # facing the wall
+        into = self._push_dir(pos) or self.heading            # the way it was trying to go
         sign = int(c.get("right_turn_sign", -1))
         # "right" in screen terms is a rotation by sign*90 in X/Z
         along = self._rot(into, side * sign * 90.0)
@@ -999,13 +1017,16 @@ class Navigator:
         keys.key_down("BACK"); time.sleep(float(c.get("unstick_back_secs", 1.0)) / 2); keys.key_up("BACK")
         keys.tap("RIGHT" if side > 0 else "LEFT", float(c.get("follow_angle_deg", 60.0)) / turn_rate)
         self._seed_heading(desired)
+        # FIX (in-game): the heading base was the position from BEFORE reversing,
+        # so the next heading came out pointing backwards (155-176° wrong).
+        here = self.r.read_position() or pos
         self._escape = {"why": "follow", "until": time.time() + float(c.get("follow_secs", 30.0)),
-                        "desired": desired, "along": along, "free": 0,
-                        "target": (pos[0] + desired[0] * 60, pos[1] + desired[1] * 60), "last": pos}
+                        "desired": desired, "along": along, "free": 0, "start": here, "into": into,
+                        "target": (here[0] + desired[0] * 60, here[1] + desired[1] * 60), "last": here}
         self.state = self.MOVING
         self._pos_hist = deque()
         self._stop_ticks = 0
-        self._prev_pos = pos
+        self._prev_pos = here
         return True
 
     def _follow_step(self, pos, esc):
@@ -1019,29 +1040,53 @@ class Navigator:
         if d >= 3.0:
             esc["last"] = pos
             mx, mz = dx / d, dz / d
-            # moving the way it's facing (not sliding sideways) = clear of the wall
-            dot = mx * esc["desired"][0] + mz * esc["desired"][1]
-            if dot > math.cos(math.radians(25)):
+            # Sliding along the wall = moving across the "into" direction.
+            # Moving with a clear component into it = the wall has ended.
+            ix, iz = esc["into"]
+            dot = mx * ix + mz * iz
+            if dot > 0.35:
                 esc["free"] += 1
             else:
                 esc["free"] = 0
-                # Sliding: the wall is on the side it's pushing towards. Map it
+                # Sliding: the wall is on the "into" side of the track. Map it
                 # (on foot), so D* doesn't send the bot back along it later.
-                wx, wz = esc["desired"][0] - dot * mx, esc["desired"][1] - dot * mz
+                wx, wz = ix - dot * mx, iz - dot * mz
                 wn = math.hypot(wx, wz)
                 if wn > 0.2 and not self.mounted:
                     for px, pz in ((lx, lz), (pos[0], pos[1])):
-                        bx, bz = px + wx / wn * 2.5, pz + wz / wn * 2.5
-                        if self._cell_of(bx, bz) != self._cell_of(px, pz):
-                            self.mark(bx, bz, BLOCKED)
-            if esc["free"] >= 2:
+                        self._mark_beside(px, pz, wx / wn, wz / wn)
+            gone = math.hypot(pos[0] - esc["start"][0], pos[1] - esc["start"][1])
+            if esc["free"] >= 2 and gone >= 10.0:
                 print("\n[FOLLOW] Past the wall — back to D*")
                 self._ev("follow_done", pos=pos, why="past the wall")
-                self._recal_cycles = 0
-                self._recal_origin = None
                 return False
         esc["target"] = (pos[0] + esc["desired"][0] * 60, pos[1] + esc["desired"][1] * 60)
         return True
+
+    def _push_dir(self, pos):
+        """Unit vector to where D* was steering, or None."""
+        if pos is None or self.last_waypoint is None or self.steer_by not in ("D*",):
+            return None
+        wx, wz = self.last_waypoint[0] - pos[0], self.last_waypoint[1] - pos[1]
+        wn = math.hypot(wx, wz)
+        return (wx / wn, wz / wn) if wn > 1.0 else None
+
+    def _mark_beside(self, px, pz, nx, nz):
+        """
+        Mark the cell on the (nx, nz) side of a bot at (px, pz) blocked.
+        Normally that's the next cell over; but if the bot is reported right at
+        the edge of its own cell with that cell's body on the wall side, it's
+        pressed against a wall INSIDE its own cell (whole-metre coordinates,
+        walls not on cell lines), so its own cell is the blocked one.
+        """
+        own = self._cell_of(px, pz)
+        for k in (1.0, 2.0, 3.0, 4.0, 5.0):
+            bx, bz = px + nx * k, pz + nz * k
+            if self._cell_of(bx, bz) != own:
+                break
+        if k >= 3.0 and self._near_cell_edge(px, pz):
+            bx, bz = px + nx * 1.0, pz + nz * 1.0     # most of its own cell is wall-ward
+        self.mark(bx, bz, BLOCKED)
 
     def _backtrack(self, pos):
         """
@@ -1078,11 +1123,15 @@ class Navigator:
         self._recal_cycles = 0
         self._recal_origin = None
         self._pushes = []
+        # forget this pocket's stuck points: the next backtrack should only come
+        # after a fresh run of failures (and goes further: self._backtracks)
+        self._stuck_hist = deque(((t, p, h) for t, p, h in self._stuck_hist
+                                  if math.hypot(p[0] - origin[0], p[1] - origin[1]) > 2 * float(
+                                      c["stuck_radius_m"])), maxlen=200)
         self.state = self.MOVING
         self._pos_hist = deque()
         self._stop_ticks = 0
-        if pos is not None:
-            self._prev_pos = pos
+        self._prev_pos = self.r.read_position() or pos   # after reversing, not before
         return True
 
     def _unstick_side(self, pos, n):

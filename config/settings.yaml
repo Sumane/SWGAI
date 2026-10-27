@@ -125,6 +125,7 @@ navigation:
   mounted_mapping: clear_only   # clear_only (default) | none = nothing while mounted | all = old behaviour
   foot_vehicle: running         # profile to switch to after dismounting
   dismount_after_stuck: 2       # stuck this many times in the same place on a vehicle -> dismount
+  stuck_window_s: 300.0         # ...counting stuck points from the last 5 minutes
   stuck_radius_m: 40.0          # "same place" = within this distance of the last stuck point
                                 # (an unstick manoeuvre itself moves the bot 10-30 m)
   dismount_method: command      # command: types dismount_command in chat | key: presses dismount_key

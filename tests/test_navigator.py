@@ -235,7 +235,9 @@ def test_on_foot_never_dismounts_and_maps(nav):
     nav.heading = (1.0, 0.0)
     for _ in range(3):
         assert nav._enter_recal((100, 100)) == "STOP"
-    assert nav.r.db.get_state("naboo", 105, 100) == BLOCKED  # the next cell along the heading
+    # At (100,100) it's on the west edge of cell 100-105, so that cell is mostly
+    # in front of it: pressed against something inside its own cell
+    assert nav.r.db.get_state("naboo", 101, 100) == BLOCKED
 
 
 def test_stuck_starts_wall_following_angled_into_the_wall(nav, monkeypatch):
