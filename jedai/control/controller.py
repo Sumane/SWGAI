@@ -73,6 +73,12 @@ class MasterController:
             for p in reversed(physicals):
                 self.input.keyUp(p)
 
+        elif cmd == "TYPE":
+            # Type text character by character (e.g. a chat command)
+            for ch in instruction.get("text", ""):
+                self.input.press(ch)
+                time.sleep(0.02)
+
         elif cmd == "RELEASE_ALL":
             self.release_all()
 

@@ -111,13 +111,25 @@ class NavDatabase:
                    state: int, resolution: int = RES_NORMAL):
         cx = world_to_cell(wx, resolution)
         cz = world_to_cell(wz, resolution)
+        now = time.time()
         with self._tx() as conn:
             conn.execute("""
                 INSERT INTO nav_cells (planet, cx, cz, resolution, state, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(planet, cx, cz, resolution)
                 DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at
-            """, (planet, cx, cz, resolution, state, time.time()))
+            """, (planet, cx, cz, resolution, state, now))
+            if resolution == RES_NORMAL:
+                # FIX: keep any 1m sub-cells in step with their 5m parent.
+                # get_state() prefers 1m data, and sub-cells created earlier
+                # (when a neighbour was blocked) were never updated, so a cell
+                # near an old obstacle ignored every later mark.
+                k = RES_NORMAL // RES_FINE
+                conn.execute("""
+                    UPDATE nav_cells SET state=?, updated_at=?
+                    WHERE planet=? AND resolution=?
+                      AND cx BETWEEN ? AND ? AND cz BETWEEN ? AND ?
+                """, (state, now, planet, RES_FINE, cx * k, cx * k + k - 1, cz * k, cz * k + k - 1))
 
     def mark_clear(self, planet: str, wx: float, wz: float,
                    resolution: int = RES_NORMAL):

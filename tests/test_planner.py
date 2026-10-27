@@ -108,3 +108,16 @@ def test_clear_cost_preference_is_configurable(db):
         pl.set_start(2.5, 2.5)
         pl.initialise()
     assert a.path_cost() > b.path_cost()
+
+
+def test_marks_near_an_old_obstacle_are_not_ignored(db):
+    """
+    Regression: blocking a cell creates 1m sub-cells around it. A neighbour
+    blocked later kept its stale 'unexplored' sub-cells, and get_state() (which
+    prefers 1m data) returned unexplored. The original returned 0 here twice.
+    """
+    db.mark_blocked(P, 132.0, 12.0)
+    db.mark_blocked(P, 142.0, 12.0)
+    assert db.get_state(P, 142.0, 12.0) == BLOCKED
+    db.mark_clear(P, 142.0, 12.0)
+    assert db.get_state(P, 142.0, 12.0) == CLEAR

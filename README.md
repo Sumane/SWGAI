@@ -110,6 +110,12 @@ simulated world (`tests/test_simulated_drive.py`) turned up two things:
   target. A 400 m trip past a wall took 2–3 km of driving, and a 400 m long
   wall wasn't solved at all. This is the strongest lead for the city looping.
 
+**Mounted vs on foot.** On a vehicle the map is now read-only, because lag
+puts marks in the wrong cells. If the bot gets stuck twice in the same place
+while mounted, it dismounts and carries on on foot with mapping on. The
+settings, and a simulator comparison of the options, are in
+[docs/REORGANISATION.md](docs/REORGANISATION.md).
+
 **Planned rebuild (not in this repo yet).** A code review of the D* Lite version found seven bugs:
 - an alignment condition that could never be met
 - wrong CLEAR marking

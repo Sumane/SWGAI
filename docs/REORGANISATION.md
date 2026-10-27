@@ -97,6 +97,7 @@ Each one was confirmed against the original code before fixing, and is covered b
 | 11 | `merge_datasets.py` renamed a clashing image and its label independently | Code | Could pair an image with the wrong label |
 | 12 | Command file written in place, so the controller could read half a file | Status review | Atomic write + retry |
 | 13 | `nav_state.json` was relative, so both scripts needed the same working directory | Status review | Now a config path |
+| 14 | Stale 1 m sub-cells: blocking a cell creates 1 m sub-cells around it, and a neighbour blocked or cleared later kept its old sub-cells. `get_state()` prefers 1 m data | Block (132,12) then (142,12): `get_state` returns unexplored, and still does after marking it clear | **Any cell within about 10 m of an earlier obstacle ignored every later mark.** Recalibration retried the same blocked cell forever while D\* (which reads 5 m cells) thought it was blocked. Probably the review's "bad CLEAR marking" |
 
 ## Behaviour changes to know about
 
@@ -118,6 +119,30 @@ every time. **This may be why none of the 13 logged v0.20 runs completed.**
 I couldn't verify SWG's handedness from here, so it's now a setting
 (`navigation.right_turn_sign`, default `1` = the original behaviour).
 `scripts/check_turn_direction.py` measures it in about 10 seconds and tells you the value.
+
+## Mounted vs on foot (added 27 Oct)
+
+- **On a vehicle the grid map is read-only.** Lag puts marks in the wrong cells. D\* still steers with the map it has.
+- **Stuck twice in the same place on a vehicle → dismount.** "Same place" is within `stuck_radius_m` (15 m). The bot then switches to the `running` profile, and every mark is written from then on.
+- **How it dismounts:** by default it types `/dismount` in chat (Enter, text, Enter). Alternatively, set `dismount_method: key` and `dismount_key` to a toolbar key. The controller has a new `TYPE` command for this.
+- **`mounted_mapping`:**
+  - `none`: read-only, the default and your rule
+  - `clear_only`: keep CLEAR marks, drop BLOCKED marks
+  - `all`: the old behaviour
+
+**Simulator sweep.** I added coordinate lag to the simulator: on a vehicle the HUD reports where the bot was 0.2–0.7 s ago. Across 4 scenarios × 4 lag values:
+
+| Mode | Arrived | Average distance driven when it arrived |
+|---|---:|---:|
+| `all` (old) | 11/16 | 4.6 km |
+| `none` + dismount (default) | 8/16 | 3.0 km |
+| `clear_only` + dismount | 11/16 | 5.0 km |
+
+Read-only arrives least often, mostly because it reaches the stuck point with an empty map, so there's no clear trail back out of a dead end. When it does arrive, it takes the shortest routes.
+
+The reasoning for `clear_only`: lag corrupts BLOCKED marks (the obstacle gets recorded on ground already driven over), but a lagged CLEAR mark is still a cell the bot really passed through.
+
+The simulator has no momentum on turns and no real terrain, so treat this as a hint and settle it in-game.
 
 ## Known issues (not changed: they need in-game testing)
 

@@ -60,3 +60,24 @@ def test_navigator_and_controller_end_to_end(tmp_path):
     t.join(3)
     assert inp.events[:3] == [("press", "numlock"), ("down", "up"), ("press", "numlock")]
     assert ("up", "up") in inp.events
+
+
+def test_dismount_command_types_in_chat(tmp_path):
+    inp = FakeInput()
+    mc = MasterController(CommandChannel(tmp_path / "c.json"), KEYS, "f8", inp, StopAfter(0))
+    sent = []
+    kc = KeyClient(CommandChannel(tmp_path / "c.json"))
+    kc.send = lambda payload, wait_for_idle=True: (sent.append(payload), mc.execute(payload))
+    kc.dismount("command", "/dismount")
+    assert [p["cmd"] for p in sent][-3:] == ["PRESS", "TYPE", "PRESS"]
+    typed = "".join(k for e, k in inp.events if e == "press" and len(k) == 1)
+    assert typed == "/dismount"
+    assert inp.events[-1] == ("press", "enter")
+
+
+def test_dismount_key_method(tmp_path):
+    kc = KeyClient(CommandChannel(tmp_path / "c.json"))
+    sent = []
+    kc.send = lambda payload, wait_for_idle=True: sent.append(payload)
+    kc.dismount("key", key="9")
+    assert sent[-1] == {"cmd": "PRESS", "key": "9"}

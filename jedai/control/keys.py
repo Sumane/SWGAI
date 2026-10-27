@@ -49,6 +49,21 @@ class KeyClient:
         self.send({"cmd": "RELEASE_ALL"})
         self.autorun_active = False
 
+    def type_text(self, text: str):
+        self.send({"cmd": "TYPE", "text": text})
+
+    def dismount(self, method: str = "command", command: str = "/dismount", key: str = ""):
+        """Get off the vehicle: type a chat command, or press a (toolbar) key."""
+        self.stop_movement()
+        if method == "key":
+            if not key:
+                raise ValueError("navigation.dismount_key is empty but dismount_method is 'key'")
+            self.press(key)
+        else:
+            self.press("ENTER")
+            self.type_text(command)
+            self.press("ENTER")
+
     # Movement helpers -------------------------------------------------------
     def start_autorun(self):
         if not self.autorun_active:

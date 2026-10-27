@@ -11,6 +11,7 @@ Commands:
     {"cmd": "KEY_UP",   "key": "FORWARD"}
     {"cmd": "TAP",      "key": "LEFT", "duration": 0.1}
     {"cmd": "TAP_MULTI","keys": ["BACK", "LEFT"], "duration": 0.5}
+    {"cmd": "TYPE",     "text": "/dismount"}       # typed character by character
     {"cmd": "RELEASE_ALL"}
     {"cmd": "STOP_AUTORUN"}
 

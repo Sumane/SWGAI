@@ -14,7 +14,7 @@ from ..control.keys import KeyClient, kill_pressed
 from ..perception.screen import Screen
 from ..perception.text import fuzzy_match
 from .dstar_lite import DStarLite
-from .grid_db import NavDatabase
+from .grid_db import CLEAR, NavDatabase
 from .navigator import Navigator
 from .velocity import VelocityTracker
 
@@ -39,6 +39,7 @@ class NavigationRunner:
         self.vel_tracker = VelocityTracker()
         self.current_vehicle = None
         self.max_speed = 16.0
+        self.mounted = False
         self.apply_vehicle(self.cfg["default_vehicle"])
 
         db_path = settings.path("nav_db")
@@ -67,8 +68,21 @@ class NavigationRunner:
         cfg = self.vehicle_speeds.get(key) or self.vehicle_speeds.get("swoop", {"max": 16.0})
         self.current_vehicle = key
         self.max_speed = cfg["max"]
+        self.mounted = key not in self.cfg["on_foot_vehicles"]
         self.vel_tracker.reset()
-        print(f"   🏍  Vehicle: {key} | max: {self.max_speed} m/s")
+        mode = "mounted, map read-only" if self.mounted else "on foot, mapping"
+        print(f"   🏍  Vehicle: {key} | max: {self.max_speed} m/s | {mode}")
+
+    def dismount(self):
+        """Get off the vehicle and switch to the on-foot profile (mapping on)."""
+        c = self.cfg
+        print("\n🚶 Dismounting...")
+        self.keys.stop_movement()
+        self.keys.dismount(c["dismount_method"], c.get("dismount_command", "/dismount"),
+                           c.get("dismount_key", ""))
+        time.sleep(c["dismount_settle_secs"])
+        self.apply_vehicle(c["foot_vehicle"])
+        self.navigator.after_dismount()
 
     def shutdown(self):
         self.keys.release_all()
@@ -160,7 +174,7 @@ class NavigationRunner:
             _, d, _ = self.target_status(frame)
             x, _, z = self.update_coords(frame)
             if x is not None:
-                self.db.mark_clear(self.planet, x, z)
+                self.navigator.mark(x, z, CLEAR)
             print(f"   {label}: {d}m")
             return d or 9999
 
@@ -315,6 +329,10 @@ class NavigationRunner:
             steer = nav.tick(pos, spd_pct, arrow, dist)
             if steer == "STOP":
                 k.key_up("FORWARD")
+            elif steer == "DISMOUNT":
+                k.key_up("FORWARD")
+                self.dismount()
+                k.key_down("FORWARD")
             elif steer == "RECAL":
                 result = nav.do_recal(pos)
                 if result is True:

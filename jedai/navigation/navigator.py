@@ -17,6 +17,13 @@ Target estimation:
 The panel arrow is used only for the initial align, target estimation, and
 as a steering fallback before D* has a path. It never fights D*.
 
+Mounted vs on foot:
+  On a vehicle the grid map is NOT updated (vehicle inertia makes the logged
+  coordinates lag the real position, so marks land in the wrong cells). D*
+  still steers with the map it already has. If the bot gets stuck twice in
+  the same place while mounted, tick() returns "DISMOUNT"; once on foot every
+  mark is written to the map and the planner.
+
 The navigator talks to the game only through `runner`, which must provide:
     runner.keys            KeyClient (key_down, key_up, tap, stop_movement)
     runner.read_position() -> (x, z) or None   (grabs a frame)
@@ -71,6 +78,22 @@ class Navigator:
         self._recal_origin = None
         self._recal_cycles = 0
 
+    @property
+    def mounted(self) -> bool:
+        """True while on a vehicle (set by the runner from the vehicle profile)."""
+        return bool(getattr(self.r, "mounted", False))
+
+    def after_dismount(self):
+        """Back on foot: start recalibration afresh, now with mapping."""
+        self.state = self.MOVING
+        self._stop_ticks = 0
+        self._recal_candidates = []
+        self._recal_visited = set()
+        self._recal_origin = None
+        self._recal_cycles = 0
+        self._last_mark_pos = None
+        self._min_speed_since_mark = 999.0
+
     def reset_estimator(self):
         """After a confirmed align to N: clear heading/accumulation, keep the estimate."""
         self._prev_pos = None
@@ -82,14 +105,30 @@ class Navigator:
     # ------------------------------------------------------------------
     # Grid marking
     # ------------------------------------------------------------------
-    def _mark(self, wx, wz, state):
-        """Write a cell to the DB and tell the planner (FIX: D* cache miss)."""
+    def mark(self, wx, wz, state, replan_now=False):
+        """
+        Record a cell in the map. Does nothing while mounted.
+        replan_now: also replan immediately (planner.update_cell), otherwise the
+        planner is told and replans on its next update (FIX: D* cache miss).
+        Returns True if the cell was recorded.
+        """
+        if self.mounted:
+            # mounted_mapping: "none" = map is read-only on a vehicle (default);
+            # "clear_only" = keep CLEAR marks (lagged positions were still driven
+            # through) but drop BLOCKED marks (those land behind the real obstacle)
+            mode = self.cfg.get("mounted_mapping", "none")
+            if mode == "none" or (mode == "clear_only" and state != CLEAR):
+                return False
+        if replan_now and self.r.planner_active:
+            self.r.planner.update_cell(wx, wz, state)   # also writes the DB
+            return True
         if state == CLEAR:
             self.r.db.mark_clear(self.r.planet, wx, wz)
         else:
             self.r.db.mark_blocked(self.r.planet, wx, wz)
         if self.r.planner_active:
             self.r.planner.note_cell(wx, wz, state)
+        return True
 
     # ------------------------------------------------------------------
     # Heading
@@ -226,11 +265,11 @@ class Navigator:
                     steps = max(1, int(d / self.cell))
                     for i in range(steps + 1):
                         t = i / steps
-                        self._mark(self._last_mark_pos[0] + t * (pos[0] - self._last_mark_pos[0]),
+                        self.mark(self._last_mark_pos[0] + t * (pos[0] - self._last_mark_pos[0]),
                                    self._last_mark_pos[1] + t * (pos[1] - self._last_mark_pos[1]),
                                    CLEAR)
                 else:
-                    self._mark(pos[0], pos[1], CLEAR)
+                    self.mark(pos[0], pos[1], CLEAR)
                 self._last_mark_pos = pos
                 self._last_mark_time = now
                 self._min_speed_since_mark = 999.0
@@ -345,21 +384,20 @@ class Navigator:
         keys.key_up("FORWARD")
 
         progress = math.hypot(final_pos[0] - start[0], final_pos[1] - start[1])
+        tag = " (mounted: not mapped)" if self.mounted else ""
         if progress >= 1.5:
-            self.r.db.mark_clear(self.r.planet, final_pos[0], final_pos[1])
+            self.mark(final_pos[0], final_pos[1], CLEAR)
             if self.r.planner_active:
-                self.r.planner.update_cell(wx, wz, CLEAR)
-            print(f"[CELL] ({wx:.0f},{wz:.0f}) CLEAR (moved {progress:.1f}m)")
+                self.mark(wx, wz, CLEAR, replan_now=True)
+            print(f"[CELL] ({wx:.0f},{wz:.0f}) CLEAR (moved {progress:.1f}m){tag}")
             mv = (final_pos[0] - start[0], final_pos[1] - start[1])
             mv_mag = math.hypot(*mv)
             if mv_mag > 0:
                 self._seed_heading((mv[0] / mv_mag, mv[1] / mv_mag))
             return True, final_pos
 
-        self.r.db.mark_blocked(self.r.planet, wx, wz)
-        if self.r.planner_active:
-            self.r.planner.update_cell(wx, wz, BLOCKED)
-        print(f"[CELL] ({wx:.0f},{wz:.0f}) BLOCKED (moved {progress:.1f}m)")
+        self.mark(wx, wz, BLOCKED, replan_now=True)
+        print(f"[CELL] ({wx:.0f},{wz:.0f}) BLOCKED (moved {progress:.1f}m){tag}")
         return False, pos
 
     def align_to_direction(self, ndx, ndz, timeout=3.0):
@@ -424,7 +462,7 @@ class Navigator:
             if fmag > 0.5:
                 fwd = (fdx / fmag, fdz / fmag)
                 self._seed_heading(fwd)
-                self.r.db.mark_clear(self.r.planet, seed[0], seed[1])
+                self.mark(seed[0], seed[1], CLEAR)
                 print(f"   Forward direction: ({fwd[0]:.2f},{fwd[1]:.2f})")
                 if seed_dist is not None:
                     target = self.project_target(seed, fwd, seed_dist)
@@ -470,6 +508,7 @@ class Navigator:
           -1 / 0 / +1   tap left / nothing / tap right
           "STOP"        stop forward movement (just entered RECALIBRATING)
           "RECAL"       runner should call do_recal()
+          "DISMOUNT"    stuck twice in the same place on a vehicle: get off
         """
         if self.state == self.MOVING:
             self.update_heading(pos, during_clean_movement=True)
@@ -513,19 +552,24 @@ class Navigator:
         if pos is not None and self.heading is not None:
             bx = pos[0] + self.heading[0] * self.cell
             bz = pos[1] + self.heading[1] * self.cell
-            self.r.db.mark_blocked(self.r.planet, bx, bz)
-            if self.r.planner_active:
-                self.r.planner.update_cell(bx, bz, BLOCKED)
+            self.mark(bx, bz, BLOCKED, replan_now=True)
 
         # FIX: guard pos=None (the original crashed here if coords weren't read)
         if pos is not None:
             if (self._recal_origin is None or
-                    math.hypot(pos[0] - self._recal_origin[0], pos[1] - self._recal_origin[1]) > 15):
+                    math.hypot(pos[0] - self._recal_origin[0], pos[1] - self._recal_origin[1])
+                    > self.cfg["stuck_radius_m"]):
                 self._recal_cycles = 0
                 self._recal_visited = set()
                 self._recal_origin = pos
             else:
                 self._recal_cycles += 1
+
+            stuck_count = self._recal_cycles + 1
+            if self.mounted and stuck_count >= self.cfg["dismount_after_stuck"]:
+                print(f"\n[NAV] Stuck {stuck_count}x within {self.cfg['stuck_radius_m']:.0f}m "
+                      f"on a vehicle — dismounting")
+                return "DISMOUNT"
 
         self._recal_candidates = [c for c in self.recal_candidates(pos)
                                   if c[3] not in self._recal_visited]
