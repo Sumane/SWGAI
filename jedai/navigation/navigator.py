@@ -1119,37 +1119,36 @@ class Navigator:
 
     def _mark_in_front(self, pos):
         """
-        Stuck: mark what's in front as BLOCKED, now, and replan.
-        FIX (in-game, 27 Oct): marks were skipped when the heading was unknown,
-        went one cell in a guessed direction, and weren't printed, so the bot
-        kept walking into the same wall. Now: the cell in front plus the cells
-        either side of it (walls are wider than one 5 m cell), in the facing
-        direction AND the direction D* wanted (if different), every time, logged.
+        Stuck: mark the ONE cell it couldn't get into as BLOCKED, and replan.
+
+        Marc's rule: D* routes the bot cell to cell; if the bot can't get into
+        the cell D* is sending it to, that cell is blocked and D* reroutes to the
+        next best one. So the cell marked is D*'s next cell from where the bot is
+        now. Only without a D* route does it fall back to the cell straight
+        ahead of its facing. Never the cells beside it: running along a flat
+        wall, those are open.
         """
-        dirs = []
-        for d in (self._facing(pos), self._push_dir(pos)):
-            if d is not None and all(d[0] * e[0] + d[1] * e[1] < 0.9 for e in dirs):
-                dirs.append(d)
-        if not dirs:
-            print("\n[MAP] Stuck but no idea which way it faces: nothing marked")
-            return
-        cells = []
-        for fx, fz in dirs:
-            for k in (1.0, 2.0, 3.0, 4.0, 5.0):      # the first cell ahead that isn't its own
-                if self._cell_of(pos[0] + fx * k, pos[1] + fz * k) != self._cell_of(*pos):
+        here = self._cell_of(*pos)
+        target = None
+        if self.r.planner_active and self.r.planner.has_path():
+            path = self.r.planner.get_planned_path(max_steps=2)
+            if len(path) > 1:
+                target = path[1]
+                how = "D*'s next cell"
+        if target is None:
+            f = self._facing(pos)
+            if f is None:
+                print("\n[MAP] Stuck but no route and no facing: nothing marked")
+                return
+            for k in (1.0, 2.0, 3.0, 4.0, 5.0):
+                bx, bz = pos[0] + f[0] * k, pos[1] + f[1] * k
+                if self._cell_of(bx, bz) != here:
                     break
-            for side in (0.0, -1.0, 1.0):          # in front, then either side of that
-                px, pz = -fz * side * self.cell, fx * side * self.cell
-                bx, bz = pos[0] + fx * k + px, pos[1] + fz * k + pz
-                c = self._cell_of(bx, bz)
-                if c in [x[0] for x in cells]:
-                    continue
-                if self.mark(bx, bz, BLOCKED, replan_now=(side == 0.0)):
-                    cells.append((c, bx, bz))
-        if cells:
-            print("\n[MAP] Blocked in front: " + ", ".join(f"({x:.0f},{z:.0f})" for _, x, z in cells))
+            target, how = (bx, bz), "cell ahead"
+        if self.mark(target[0], target[1], BLOCKED, replan_now=True):
+            print(f"\n[MAP] Couldn't get into {how} ({target[0]:.0f},{target[1]:.0f}): blocked, D* rerouting")
         elif self.mounted:
-            print("\n[MAP] Mounted: blocked cells not recorded (dismount rule)")
+            print("\n[MAP] Mounted: blocked cell not recorded (dismount rule)")
 
     def _mark_beside(self, px, pz, nx, nz):
         """

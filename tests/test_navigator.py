@@ -236,8 +236,25 @@ def test_on_foot_never_dismounts_and_maps(nav):
     for _ in range(3):
         assert nav._enter_recal((100, 100)) == "STOP"
     assert nav.r.db.get_state("naboo", 105, 100) == BLOCKED   # the cell in front
-    assert nav.r.db.get_state("naboo", 105, 95) == BLOCKED    # and either side of it
-    assert nav.r.db.get_state("naboo", 105, 105) == BLOCKED
+    assert nav.r.db.get_state("naboo", 105, 95) != BLOCKED    # never the cells beside it
+    assert nav.r.db.get_state("naboo", 105, 105) != BLOCKED
+
+
+def test_stuck_marks_only_dstar_next_cell(nav):
+    """Marc's rule: can't get into the cell D* is routing to -> that cell is blocked, D* reroutes."""
+    nav.r.mounted = False
+    nav.r.planner.set_goal(100, 2.5)
+    nav.r.planner.set_start(2.5, 2.5)
+    nav.r.planner.initialise()
+    nav.r.planner_active = True
+    first = nav.r.planner.get_planned_path(max_steps=2)[1]
+    nav.heading = (0.0, 1.0)                    # facing doesn't matter when D* has a route
+    nav._enter_recal((2.5, 2.5))
+    assert nav.r.db.get_state("naboo", *first) == BLOCKED
+    blocked = [(x, z) for x in range(-5, 15, 5) for z in range(-5, 15, 5)
+               if nav.r.db.get_state("naboo", x + 2.5, z + 2.5) == BLOCKED]
+    assert len(blocked) == 1                    # only that one
+    assert nav.r.planner.get_planned_path(max_steps=2)[1] != first   # rerouted
 
 
 def test_stuck_starts_wall_following_angled_into_the_wall(nav, monkeypatch):
