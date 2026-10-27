@@ -28,6 +28,7 @@ _KEYSYMS = {
     "/": "slash", "-": "minus", "=": "equal", ".": "period", ",": "comma",
     ";": "semicolon", "'": "apostrophe", "[": "bracketleft", "]": "bracketright",
     "\\": "backslash", "`": "grave",
+    "add": "KP_Add", "subtract": "KP_Subtract", "numpad+": "KP_Add", "numpad-": "KP_Subtract",
 }
 _KEYSYMS.update({f"f{i}": f"F{i}" for i in range(1, 13)})
 

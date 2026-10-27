@@ -47,6 +47,11 @@ class KeyClient:
         self.send({"cmd": "TAP", "key": key, "duration": duration})
         time.sleep(duration + 0.05)
 
+    def tap_multi(self, keys, duration: float = 0.05):
+        """Hold several keys together, e.g. ["ctrl", "h"]."""
+        self.send({"cmd": "TAP_MULTI", "keys": list(keys), "duration": duration})
+        time.sleep(duration + 0.05)
+
     def key_down(self, key: str):
         self.send({"cmd": "KEY_DOWN", "key": key})
 
