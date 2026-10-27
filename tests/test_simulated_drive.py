@@ -378,3 +378,22 @@ def test_long_wall_and_pocket_with_slow_vision(tmp_path, monkeypatch, walls):
     r.should_stop = lambda: clock.t > 1000 + 1500
     r.navigate()
     assert world.dist() <= s.nav["stop_dist"], f"ended {world.dist()}m away"
+
+
+def test_on_foot_arrives_within_10m(tmp_path, monkeypatch):
+    """Marc: running, it called success at 45 m. On foot it must get within stop_dist_on_foot."""
+    clock = Clock()
+    for mod in (nav_mod, runner_mod):
+        monkeypatch.setattr(mod.time, "time", clock.time)
+        monkeypatch.setattr(mod.time, "sleep", clock.sleep)
+    answers = iter(["1", "0"])                                   # running, waypoint 0
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    world = World(clock, target=(300.0, 0.0), right_is_clockwise=True)
+    world.SPEED = 10.5
+    s = load_settings(local_file="none.yaml")
+    s.raw["paths"]["nav_db"] = str(tmp_path / "nav.db")
+    r = NavigationRunner(s, hud=SimHud(world), keys=SimKeys(world, clock), screen=SlowScreen(world, clock))
+    r.vel_tracker._clock = clock.time
+    r.should_stop = lambda: clock.t > 1000 + 600
+    r.navigate()
+    assert world.dist() <= s.nav["stop_dist_on_foot"], f"ended {world.dist()}m away"

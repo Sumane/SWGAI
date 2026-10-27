@@ -323,6 +323,11 @@ class NavigationRunner:
             print("\n\n🏁  SUCCESS!")
 
     _end_reason = "stopped"
+    _approaching = False
+    _approach_best = 1e9
+    _approach_t = 0.0
+    _approach_off_until = 0.0
+    turn_rate_deg_s = None
 
     def _cells_for_report(self):
         """Blocked and clear cells round the run, for the report's map."""
@@ -396,10 +401,43 @@ class NavigationRunner:
             spd = self.vel_tracker.speed()
             spd_pct = spd / self.max_speed if self.max_speed > 0 else 0
 
-            # Arrival
-            if dist <= c["stop_dist"]:
+            # Arrival. On foot the bot can stop where it wants, so "there" is
+            # much closer than on a vehicle (Marc, 27 Oct: it called a run
+            # successful at 45 m while running).
+            stop = c.get("stop_dist_on_foot", 10) if not self.mounted else c["stop_dist"]
+            creep = c.get("final_creep_dist_on_foot", 0) if not self.mounted else c["final_creep_dist"]
+            # Final approach on foot: stop-and-go by the arrow. At ~2 s per
+            # decision a runner overshoots a 10 m circle and orbits it; this
+            # turns on the spot until the arrow says N, then steps forward.
+            approach = c.get("approach_dist_on_foot", 30)
+            now = time.time()
+            if not self._approaching or dist < self._approach_best:
+                self._approach_best, self._approach_t = dist, now
+            if self._approaching and now - self._approach_t > 20:
+                # not getting closer (something in the way): hand back to D* for a while
+                self._approach_off_until = now + 30
+                self._approaching = False
+                k.key_down("FORWARD")
+            if (not self.mounted and approach and stop < dist <= approach
+                    and now >= self._approach_off_until):
+                self._approaching = True
+                k.key_up("FORWARD")
+                if arrow and arrow != "N":
+                    deg = {"NE": 45, "E": 90, "SE": 135, "S": 180, "SW": 135, "W": 90, "NW": 45}.get(arrow, 45)
+                    rate = self.turn_rate_deg_s or c.get("turn_rate_deg_s", 100.0)
+                    k.tap("RIGHT" if arrow in ("NE", "E", "SE", "S") else "LEFT", 0.8 * deg / rate)
+                else:
+                    k.tap("FORWARD", max(0.3, min(1.5, 0.7 * (dist - stop / 2) / max(self.max_speed, 1))))
+                self.rec.tick(frame, pos=pos, dist=dist, arrow=arrow, state="APPROACH")
+                print("\r" + self.status_line(arrow, dist, 0, 0, px, pz) + " [approach]", end="", flush=True)
+                time.sleep(c["loop_interval"])
+                continue
+            if self._approaching and dist > approach:
+                self._approaching = False
+                k.key_down("FORWARD")
+            if dist <= stop:
                 self.close_read_count += 1
-                if dist <= c["final_creep_dist"]:
+                if dist <= creep:
                     k.key_up("FORWARD")
                     k.tap("FORWARD", duration=c["creep_pulse_on"])
                     time.sleep(c["creep_pulse_off"])

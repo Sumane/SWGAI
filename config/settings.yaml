@@ -62,7 +62,10 @@ navigation:
   abort_if_further_m: 300       # watchdog: stop if this much further than its closest so far (0 = off)
 
   # Arrival
-  stop_dist: 50                 # metres: start counting arrival readings
+  stop_dist: 50                 # metres: arrived (on a vehicle), after verify_readings in a row
+  stop_dist_on_foot: 10         # metres: arrived when walking/running
+  final_creep_dist_on_foot: 0   # on foot: no stop-start creeping at the end
+  approach_dist_on_foot: 30     # on foot, closer than this: turn on the spot to the arrow, then step (0 = off)
   verify_readings: 5            # consecutive close readings = arrived
   final_creep_dist: 20          # metres: pulse forward instead of holding
   creep_pulse_on: 0.8
