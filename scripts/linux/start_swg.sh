@@ -2,11 +2,14 @@
 # Start SWGEmu under Wine in its OWN X display, so JedAI can capture it and
 # send keys to it without touching your other windows.
 #
-#   scripts/linux/start_swg.sh            # uses the defaults below
-#   SWG_DIR=/path/to/Swgemu RES=1920x1080 scripts/linux/start_swg.sh
+#   scripts/linux/start_swg.sh                  # fullscreen game display (default)
+#   SWG_WINDOW=windowed RES=1920x1080 scripts/linux/start_swg.sh
 #
-# On Wayland (Ubuntu's default) it opens a "rootful" Xwayland window on :2 —
-# GPU-accelerated, looks like a normal window — and runs the game inside it.
+# On Wayland (Ubuntu's default) it opens a "rootful" Xwayland display on :2 —
+# GPU-accelerated — and runs the game inside it. Fullscreen is the default:
+# a window gets shrunk by the desktop's top bar and title bar, which cuts off
+# the right and bottom of the game (the minimap coordinates and menu bar).
+# Use Super or Alt+Tab to get back to your terminals.
 # Then set in config/settings.local.yaml:
 #     platform: {x_display: ":2"}
 #     screen:   {monitor_index: 1}
@@ -16,7 +19,8 @@ set -euo pipefail
 SWG_DIR="${SWG_DIR:-/run/media/marc/New Volume/Swgemu}"
 PREFIX="${WINEPREFIX:-$HOME/.wine-swg}"
 DISP="${JEDAI_DISPLAY:-:2}"
-RES="${RES:-2560x1440}"          # match screenWidth/screenHeight in the game's options.cfg
+SWG_WINDOW="${SWG_WINDOW:-fullscreen}"   # fullscreen | windowed
+RES="${RES:-2560x1440}"          # windowed only; match screenWidth/screenHeight in options.cfg
 
 XPID=""
 cleanup() { [[ -n "$XPID" ]] && kill "$XPID" 2>/dev/null || true; }
@@ -28,9 +32,11 @@ if [[ "${XDG_SESSION_TYPE:-}" == "wayland" ]]; then
     if [[ -e "/tmp/.X11-unix/X$n" ]]; then
         echo "Display $DISP already exists — reusing it"
     else
-        echo "Starting game display $DISP ($RES)..."
+        echo "Starting game display $DISP ($SWG_WINDOW)..."
+        if [[ "$SWG_WINDOW" == "fullscreen" ]]; then
+            Xwayland "$DISP" -fullscreen -noreset &
         # -decorate gives the window a title bar (needs a recent Xwayland); fall back without it
-        if Xwayland -help 2>&1 | grep -q -- "-decorate"; then
+        elif Xwayland -help 2>&1 | grep -q -- "-decorate"; then
             Xwayland "$DISP" -geometry "$RES" -decorate -noreset &
         else
             Xwayland "$DISP" -geometry "$RES" -noreset &
