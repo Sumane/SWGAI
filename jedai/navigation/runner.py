@@ -357,4 +357,13 @@ class NavigationRunner:
         p = f"({px:.0f},{pz:.0f})" if px is not None and pz is not None else "(?,?)"
         return (f"[{nav.state[:5]:>5}] Dir:{arrow or '---':>3} | Dist:{dist or 0:>5}m | "
                 f"Min:{self.min_dist_seen:>5}m | Spd:{spd:.1f}m/s ({spd_pct * 100:.0f}%) | "
-                f"Pos:{p} | H:{h} Est:{'L' if nav.est_locked else '.'}")
+                f"Pos:{p} | H:{h} | {self._est_text(nav)}")
+
+    @staticmethod
+    def _est_text(nav):
+        """Target estimate for the status line: where, how sure, and whether D* follows it."""
+        e = nav.estimator
+        if nav.target_wx is None or e.sigma_m is None:
+            return f"Est: ... ({len(e.readings)} readings)"
+        who = "D*" if nav.est_locked else "arrow"
+        return f"Est:({nav.target_wx:.0f},{nav.target_wz:.0f})±{e.sigma_m:.0f}m [{who}]"
