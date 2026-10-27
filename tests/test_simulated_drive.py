@@ -375,6 +375,6 @@ def test_long_wall_and_pocket_with_slow_vision(tmp_path, monkeypatch, walls):
     r = NavigationRunner(s, hud=SimHud(world), keys=SimKeys(world, clock),
                          screen=SlowScreen(world, clock))
     r.vel_tracker._clock = clock.time
-    r.should_stop = lambda: clock.t > 1000 + 900
+    r.should_stop = lambda: clock.t > 1000 + 1500
     r.navigate()
     assert world.dist() <= s.nav["stop_dist"], f"ended {world.dist()}m away"

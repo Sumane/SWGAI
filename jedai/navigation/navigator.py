@@ -410,6 +410,7 @@ class Navigator:
 
     _behind_turn = 0
     pivot_side = 0
+    _last_pivot_t = 0.0
 
     def pivot(self, side, angle_deg=None):
         """Turn on the spot (FORWARD released) by angle_deg (default: how far off D* is)."""
@@ -422,8 +423,9 @@ class Navigator:
             self._seed_heading(self._rot(self.heading, side * int(c.get("right_turn_sign", -1)) * angle))
         self._prev_pos = None
         self._behind_turn = 0
-        self._pos_hist = deque()
-        self._stop_ticks = 0
+        # Not resetting the stop/grind detection here: pivoting every tick
+        # against a wall hid the fact that it was stuck (simulator).
+        self._last_pivot_t = time.time()
         self._ev("pivot", side="RIGHT" if side > 0 else "LEFT", angle=angle)
     _tick_dt = 0.5           # seconds per main-loop tick (measured)
     _last_tick_t = None
@@ -806,7 +808,8 @@ class Navigator:
                     turn = self.steer_toward(pos, wp[0], wp[1])
                     # FIX (in-game "big circles"): turning round while running
                     # takes a 40 m loop at 2 s per tick. Stop and turn on the spot.
-                    if turn and self.steer_angle_deg >= float(self.cfg.get("pivot_deg", 100.0)):
+                    if turn and self.steer_angle_deg >= float(self.cfg.get("pivot_deg", 100.0)) \
+                            and time.time() - self._last_pivot_t > 3.0:
                         self.pivot_side = turn
                         return "PIVOT"
                     return turn

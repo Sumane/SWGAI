@@ -49,3 +49,13 @@ def test_systematic_misreads_need_to_hold_before_they_are_believed():
         c.t = 1.0 * (i + 1)
         out = g.check(v)
         assert (out is None) == (v > 5000), (v, out)
+
+
+def test_extra_digit_from_the_arrow_is_repaired():
+    """In-game: 298 m read as 2988 for 8 s; it got accepted and the watchdog stopped the run."""
+    from jedai.perception.text import repair_extra_digit
+    assert repair_extra_digit(2988, 299, 15) == 298
+    assert repair_extra_digit(8987, 887, 15) == 887
+    assert repair_extra_digit(8989, 898, 15) == 898
+    assert repair_extra_digit(1105, 980, 15) == 1105     # a real change from 3 to 4 digits stays
+    assert repair_extra_digit(305, 299, 15) == 305       # same length: untouched

@@ -13,7 +13,7 @@ import time
 from ..control.channel import CommandChannel
 from ..control.keys import KeyClient, kill_pressed
 from ..perception.screen import Screen
-from ..perception.text import fuzzy_match
+from ..perception.text import fuzzy_match, repair_extra_digit
 from .dstar_lite import DStarLite
 from .grid_db import CLEAR, NavDatabase
 from .navigator import Navigator
@@ -140,7 +140,15 @@ class NavigationRunner:
         # FIX: OCR sometimes adds a digit (887 m read as 9887 m or 8989 m). Those
         # readings wrecked the target estimate and the explore sweep's choice.
         self.last_raw_dist = best.distance
-        dist = self.dist_gate.check(best.distance)
+        raw = best.distance
+        g = self.dist_gate
+        if g.last is not None and raw is not None:
+            tol = g._allowed(time.time() - g.t_last) if g.t_last is not None else g.base_tol
+            fixed = repair_extra_digit(raw, g.last, tol)
+            if fixed != raw:
+                self.rec.event("dist_repaired", raw=raw, fixed=fixed)
+                raw = fixed
+        dist = g.check(raw)
         if dist is None and best.distance is not None:
             self.rejected_dists += 1
             self.rec.event("dist_rejected", raw=best.distance, last=self.dist_gate.last)
