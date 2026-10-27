@@ -1,0 +1,1 @@
+This image recognition model recognises individual waypoint panels within a group of waypoints.

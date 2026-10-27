@@ -1,0 +1,23 @@
+# Model weights and checkpoints (distribute via GitHub Releases)
+*.pt
+*.pth
+# Runtime state
+*.db
+*.db-shm
+*.db-wal
+nav_state.json
+depth_bridge.json
+debug_logs/
+# Captures and datasets
+*.mp4
+*.ivf
+*.jsonl
+raw_data/
+processed/
+uncertain_captures/
+clean_data/
+# Third-party checkout (clone separately from DepthAnything/Depth-Anything-V2)
+jedai/Scripts/depth_anything_v2/
+# Python
+__pycache__/
+*.pyc

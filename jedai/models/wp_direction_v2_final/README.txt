@@ -1,0 +1,1 @@
+This image recognition model recognises the direction of the arror in a waypoint panel.

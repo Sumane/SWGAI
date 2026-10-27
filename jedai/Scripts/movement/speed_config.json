@@ -1,0 +1,25 @@
+
+{
+  "walking": {
+    "max": 5.20,
+    "p95": 5.00,
+    "threshold": 2.50
+  },
+  "running": {
+    "max": 10.50,
+    "p95": 9.50,
+    "threshold": 4.75
+  },
+  "speederbike": {
+    "max": 14.00,
+    "p95": 13.50,
+    "threshold": 6.75
+  },
+  "swoop": {
+    "max": 16.00,
+    "p95": 15.00,
+    "threshold": 7.50
+  }
+}
+
+# E:\SWGEMU_bot\jedai\Scripts\movement\speed detection and logic

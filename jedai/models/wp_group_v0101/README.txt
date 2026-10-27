@@ -1,0 +1,1 @@
+This image recognition model recognises a group of waypoints on a screen.
