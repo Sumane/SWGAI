@@ -384,10 +384,47 @@ class Navigator:
         n = max(n, int(math.ceil(1.5 * speed * self._tick_dt / self.cell)))
         path = self.r.planner.get_planned_path(max_steps=n + 1)
         if len(path) > 1:
-            return path[min(n, len(path) - 1)]
+            # FIX (in-game): aiming straight at a point 3+ cells along the path
+            # cut the corner round the end of a known wall, so the bot walked
+            # into the wall it had just mapped. Take the furthest path point it
+            # can see in a straight line without crossing a blocked cell.
+            start = path[0]
+            best = path[1]
+            for p in path[1:n + 1]:
+                if self._line_clear(start, p):
+                    best = p
+                else:
+                    break
+            return best
         return self.r.planner.next_waypoint()
 
+    def _line_clear(self, a, b):
+        d = math.hypot(b[0] - a[0], b[1] - a[1])
+        steps = max(1, int(d))
+        for i in range(1, steps + 1):
+            t = i / steps
+            if self.r.planner._state(self._cell_of(a[0] + t * (b[0] - a[0]),
+                                                   a[1] + t * (b[1] - a[1]))) == BLOCKED:
+                return False
+        return True
+
     _behind_turn = 0
+    pivot_side = 0
+
+    def pivot(self, side, angle_deg=None):
+        """Turn on the spot (FORWARD released) by angle_deg (default: how far off D* is)."""
+        c, keys = self.cfg, self.r.keys
+        angle = self.steer_angle_deg if angle_deg is None else angle_deg
+        rate = float(getattr(self.r, "turn_rate_deg_s", None) or c.get("turn_rate_deg_s", 100.0))
+        keys.key_up("FORWARD")
+        keys.tap("RIGHT" if side > 0 else "LEFT", angle / rate)
+        if self.heading is not None:            # dead-reckon; movement corrects it
+            self._seed_heading(self._rot(self.heading, side * int(c.get("right_turn_sign", -1)) * angle))
+        self._prev_pos = None
+        self._behind_turn = 0
+        self._pos_hist = deque()
+        self._stop_ticks = 0
+        self._ev("pivot", side="RIGHT" if side > 0 else "LEFT", angle=angle)
     _tick_dt = 0.5           # seconds per main-loop tick (measured)
     _last_tick_t = None
     steer_angle_deg = 0.0
@@ -766,7 +803,13 @@ class Navigator:
                 wp = self.lookahead_waypoint()
                 if wp is not None:
                     self.steer_by, self.last_waypoint = "D*", wp
-                    return self.steer_toward(pos, wp[0], wp[1])
+                    turn = self.steer_toward(pos, wp[0], wp[1])
+                    # FIX (in-game "big circles"): turning round while running
+                    # takes a 40 m loop at 2 s per tick. Stop and turn on the spot.
+                    if turn and self.steer_angle_deg >= float(self.cfg.get("pivot_deg", 100.0)):
+                        self.pivot_side = turn
+                        return "PIVOT"
+                    return turn
             self.steer_by, self.last_waypoint = "arrow", None
 
             # No confident estimate yet: follow the arrow. It's drawn relative to
@@ -885,19 +928,8 @@ class Navigator:
         if not self.r.planner_active and pos is not None and self.target_wx is not None:
             self._set_target(self.target_wx, self.target_wz, self._est_dist_at_last, pos)
 
-        if pos is not None and self.heading is not None:
-            # FIX: the blocked cell is the one just in front of the bot, not one
-            # a whole cell (5 m) ahead: pressed against a wall the bot is often
-            # already reported inside the wall's cell, and marking the cell
-            # beyond it left D* routing through the real obstacle forever.
-            # The first point along the heading that's in a different cell: the
-            # cell it's standing in is walkable, and marking it blocked just got
-            # it re-cleared as the bot moved off (and the wall forgotten).
-            # Mark where D* was sending it (that's what was blocked, and marking it
-            # forces a new plan). The heading is a worse guess: it's noisy, and it
-            # follows the slide along the wall rather than the push into it.
-            push = self._push_dir(pos) or self.heading
-            self._mark_beside(pos[0], pos[1], push[0], push[1])
+        if pos is not None:
+            self._mark_in_front(pos)
 
         # FIX: guard pos=None (the original crashed here if coords weren't read)
         if pos is not None:
@@ -941,11 +973,14 @@ class Navigator:
         """
         c, keys = self.cfg, self.r.keys
         n = self._recal_cycles                       # times stuck here before
-        if n + 1 >= int(c.get("backtrack_after_stuck", 4)) and self._track:
+        bt = int(c.get("backtrack_after_stuck", 0))
+        if bt and n + 1 >= bt and self._track:
             return self._backtrack(pos)
         side = self._unstick_side(pos, n)
-        if c.get("wall_follow", True) and self.heading is not None and pos is not None:
+        if c.get("wall_follow", False) and self.heading is not None and pos is not None:
             return self._start_follow(pos, side, n)
+        if self.r.planner_active and self.heading is not None and pos is not None:
+            return self._unstick_towards_plan(pos, n)
         angle = min(45.0 * (1 + n // 2), 135.0)      # widen the turn if it keeps happening
         turn_rate = float(getattr(self.r, "turn_rate_deg_s", None) or c.get("turn_rate_deg_s", 100.0))
         back_s = float(c.get("unstick_back_secs", 1.0))
@@ -978,7 +1013,7 @@ class Navigator:
             if fd is not None:
                 self.observe_target(end, fd, None)
         if end is not None and self.heading is not None:
-            secs = min(2.0 + 2.0 * n, 10.0)
+            secs = float(self.cfg.get("unstick_escape_secs", 2.0))
             self._escape = {"until": time.time() + secs, "why": "escape",
                             "target": (end[0] + self.heading[0] * 60, end[1] + self.heading[1] * 60)}
         self.state = self.MOVING
@@ -1071,6 +1106,51 @@ class Navigator:
         wn = math.hypot(wx, wz)
         return (wx / wn, wz / wn) if wn > 1.0 else None
 
+    def _facing(self, pos):
+        """Best guess at the way the bot faces: heading, else from the arrow, else D*'s direction."""
+        if self.heading is not None:
+            return self.heading
+        a = self._last_arrow
+        if a in ARROW_DEG and self.target_wx is not None and pos is not None:
+            b = math.atan2(self.target_wz - pos[1], self.target_wx - pos[0])
+            f = b - int(self.cfg.get("right_turn_sign", -1)) * math.radians(ARROW_DEG[a])
+            return (math.cos(f), math.sin(f))
+        return self._push_dir(pos)
+
+    def _mark_in_front(self, pos):
+        """
+        Stuck: mark what's in front as BLOCKED, now, and replan.
+        FIX (in-game, 27 Oct): marks were skipped when the heading was unknown,
+        went one cell in a guessed direction, and weren't printed, so the bot
+        kept walking into the same wall. Now: the cell in front plus the cells
+        either side of it (walls are wider than one 5 m cell), in the facing
+        direction AND the direction D* wanted (if different), every time, logged.
+        """
+        dirs = []
+        for d in (self._facing(pos), self._push_dir(pos)):
+            if d is not None and all(d[0] * e[0] + d[1] * e[1] < 0.9 for e in dirs):
+                dirs.append(d)
+        if not dirs:
+            print("\n[MAP] Stuck but no idea which way it faces: nothing marked")
+            return
+        cells = []
+        for fx, fz in dirs:
+            for k in (1.0, 2.0, 3.0, 4.0, 5.0):      # the first cell ahead that isn't its own
+                if self._cell_of(pos[0] + fx * k, pos[1] + fz * k) != self._cell_of(*pos):
+                    break
+            for side in (0.0, -1.0, 1.0):          # in front, then either side of that
+                px, pz = -fz * side * self.cell, fx * side * self.cell
+                bx, bz = pos[0] + fx * k + px, pos[1] + fz * k + pz
+                c = self._cell_of(bx, bz)
+                if c in [x[0] for x in cells]:
+                    continue
+                if self.mark(bx, bz, BLOCKED, replan_now=(side == 0.0)):
+                    cells.append((c, bx, bz))
+        if cells:
+            print("\n[MAP] Blocked in front: " + ", ".join(f"({x:.0f},{z:.0f})" for _, x, z in cells))
+        elif self.mounted:
+            print("\n[MAP] Mounted: blocked cells not recorded (dismount rule)")
+
     def _mark_beside(self, px, pz, nx, nz):
         """
         Mark the cell on the (nx, nz) side of a bot at (px, pz) blocked.
@@ -1132,6 +1212,35 @@ class Navigator:
         self._pos_hist = deque()
         self._stop_ticks = 0
         self._prev_pos = self.r.read_position() or pos   # after reversing, not before
+        return True
+
+    def _unstick_towards_plan(self, pos, n):
+        """
+        Back off a step, face where D* now wants to go (it has just been told
+        about the blocked cells in front), and carry on. No blind 2 s run away
+        from the wall, which then needed a big loop to come back.
+        """
+        c, keys = self.cfg, self.r.keys
+        keys.stop_movement()
+        keys.key_up("FORWARD")
+        keys.key_down("BACK"); time.sleep(float(c.get("unstick_back_secs", 1.0)) * 0.7); keys.key_up("BACK")
+        here = self.r.read_position() or pos
+        if self.r.planner_active:
+            self.r.planner.update_start(here[0], here[1])
+        wp = self.lookahead_waypoint() if self.r.planner.has_path() else None
+        if wp is not None:
+            turn = self.steer_toward(here, wp[0], wp[1])
+            angle = self.steer_angle_deg
+        else:
+            turn, angle = self._unstick_side(here, n), 45.0
+        if turn == 0:
+            turn, angle = self._unstick_side(here, n), 30.0     # D* says straight on: nudge
+        print(f"\n[UNSTICK] stepped back, turning {'RIGHT' if turn > 0 else 'LEFT'} {angle:.0f}° "
+              f"to D*'s new route (stuck {n + 1}x here)")
+        self._ev("unstick", pos=here, side="RIGHT" if turn > 0 else "LEFT", angle=angle, times_here=n + 1)
+        self.pivot(turn, angle)
+        self._prev_pos = here
+        self.state = self.MOVING
         return True
 
     def _unstick_side(self, pos, n):

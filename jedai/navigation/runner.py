@@ -426,6 +426,9 @@ class NavigationRunner:
                     k.key_up("FORWARD")
                     self.explore_sweep()
                     k.key_down("FORWARD")
+            elif steer == "PIVOT":
+                nav.pivot(nav.pivot_side)
+                k.key_down("FORWARD")
             elif steer == -1:
                 k.tap("LEFT", nav.turn_tap_secs())
             elif steer == 1:

@@ -89,16 +89,18 @@ navigation:
   stop_speed_ratio: 0.10        # below this fraction of max speed = stopped
   stop_debounce: 3              # consecutive stopped ticks before recalibrating
   steer_deadband: 0.15          # sin(angle) below which the bot drives straight
+  pivot_deg: 100.0              # D* direction this far off: stop and turn on the spot
   steer_gain: 0.6               # turn tap = gain x (degrees off) / turn_rate_deg_s ...
   steer_max_tap_secs: 0.8       # ... capped at this
   steer_lookahead_cells: 3      # steer at a point this many cells along the D* path, not the next cell
   turn_rate_deg_s: 100.0        # how fast LEFT/RIGHT turn (scan_turn_time 0.9 s x 4 steps ~ 360°)
   unstick_back_secs: 1.0        # stuck: reverse this long,
   unstick_forward_secs: 2.0     #   turn 45° (wider if it keeps happening), drive this long
-  wall_follow: true             # stuck: follow the wall (angled into it, the game slides you along)
+  unstick_escape_secs: 2.0      #   then this long before D* steers again
+  wall_follow: false            # stuck: follow the wall (angled into it). OFF: in-game it drove big circles
   follow_angle_deg: 60.0        #   turn this far from facing the wall (90 = parallel)
   follow_secs: 30.0             #   give up following after this long
-  backtrack_after_stuck: 4      # stuck this often in one place: go back the way it came
+  backtrack_after_stuck: 0      # stuck this often in one place: go back the way it came (0 = off)
   backtrack_m: 40.0             #   this far along its track (more each time)
   backtrack_secs: 25.0          #   giving up after this long
   heading_min_move_m: 3.0       # heading from moves at least this long (coords are whole metres)

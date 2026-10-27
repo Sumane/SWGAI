@@ -235,13 +235,15 @@ def test_on_foot_never_dismounts_and_maps(nav):
     nav.heading = (1.0, 0.0)
     for _ in range(3):
         assert nav._enter_recal((100, 100)) == "STOP"
-    # At (100,100) it's on the west edge of cell 100-105, so that cell is mostly
-    # in front of it: pressed against something inside its own cell
-    assert nav.r.db.get_state("naboo", 101, 100) == BLOCKED
+    assert nav.r.db.get_state("naboo", 105, 100) == BLOCKED   # the cell in front
+    assert nav.r.db.get_state("naboo", 105, 95) == BLOCKED    # and either side of it
+    assert nav.r.db.get_state("naboo", 105, 105) == BLOCKED
 
 
 def test_stuck_starts_wall_following_angled_into_the_wall(nav, monkeypatch):
+    """Wall-following is off by default now (in-game it drove big circles); still works if enabled."""
     monkeypatch.setattr("time.sleep", lambda s: None)
+    nav.cfg = dict(nav.cfg, wall_follow=True)
     nav.heading = (1.0, 0.0)                     # facing the wall (east)
     nav._last_arrow = "E"                        # target to the right
     assert nav.do_recal((0, 0)) is True
