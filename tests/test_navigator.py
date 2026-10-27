@@ -56,10 +56,15 @@ def test_steering_uses_angle_not_metres(nav):
     # (The old unnormalised cross product gave 1.7 here and steered.)
     x, z = 20 * math.cos(math.radians(5)), 20 * math.sin(math.radians(5))
     assert nav.steer_toward((0, 0), x, z) == 0
-    # 30 degrees off -> steer, sign follows the cross product
+    # 30 degrees off. Heading east, target 30° anticlockwise (north-east).
     x, z = 20 * math.cos(math.radians(30)), 20 * math.sin(math.radians(30))
+    # Measured SWG convention (right_turn_sign -1): RIGHT turns clockwise, so turn LEFT
+    nav.cfg = dict(nav.cfg, right_turn_sign=-1)
+    assert nav.steer_toward((0, 0), x, z) == -1
+    assert nav.steer_toward((0, 0), x, -z) == 1
+    # Original v0.20 assumption (sign 1) gave the opposite
+    nav.cfg = dict(nav.cfg, right_turn_sign=1)
     assert nav.steer_toward((0, 0), x, z) == 1
-    assert nav.steer_toward((0, 0), x, -z) == -1
 
 
 def _drive(nav, start, heading, n, step=2.0):

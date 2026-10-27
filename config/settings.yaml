@@ -84,11 +84,11 @@ navigation:
   stop_debounce: 3              # consecutive stopped ticks before recalibrating
   steer_deadband: 0.15          # sin(angle) below which the bot drives straight
   # Which way the RIGHT key turns the heading in X/Z coordinates.
-  #   1 = the original v0.20 code: taps RIGHT when the target is anticlockwise
-  #       of the heading (correct only if +X/+Z form a mirrored frame)
-  #  -1 = taps RIGHT when the target is clockwise (correct if X = east, Z = north)
-  # Run  python scripts/check_turn_direction.py  in-game to find out which is right.
-  right_turn_sign: 1
+  #  -1 = RIGHT turns clockwise (X = east, Z = north). MEASURED in-game 27 Oct 2026
+  #       with scripts/check_turn_direction.py: 3/3 trials.
+  #   1 = what the original v0.20 code assumed, so its D* steering turned the
+  #       wrong way. That's the likely reason none of its 13 logged runs completed.
+  right_turn_sign: -1
 
   # Mounted vs on foot. A cell the bot drove through is CLEAR however fast it
   # went, so CLEAR is always recorded. BLOCKED is only recorded on foot: a vehicle

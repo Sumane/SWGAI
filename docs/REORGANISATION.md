@@ -109,7 +109,14 @@ Each one was confirmed against the original code before fixing, and is covered b
   will route differently from v0.20, hopefully better.
 - **Steering** reacts to about 8.6° of error instead of about 1.5° (#10).
 
-## Turn direction: please check this first
+## Turn direction (CONFIRMED 27 Oct)
+
+Measured in-game with `scripts/check_turn_direction.py`, 3/3 trials: RIGHT
+turns the heading clockwise (X = east, Z = north), so the original v0.20
+steering was mirrored. The default is now `right_turn_sign: -1`. The original
+analysis follows.
+
+### Turn direction: original note
 
 The steering code taps RIGHT when `heading × target > 0` in X/Z. If SWG's X is
 east and Z is north, that is backwards: the bot turns away from D*'s next cell.

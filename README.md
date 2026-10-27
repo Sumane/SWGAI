@@ -100,11 +100,12 @@ These are detector scores, not proof that the bot navigates. They haven't been c
 
 **What the simulator showed.** Driving the real navigator code through a
 simulated world (`tests/test_simulated_drive.py`) turned up two things:
-- **The steering may turn the wrong way.** If SWG's X is east and Z is north,
-  the original code taps LEFT when D*'s next cell is to the right. In the
-  simulator that mismatch never arrives; with the sign matched, it arrives
-  every time. That may be why none of the 13 logged v0.20 runs completed. It's
-  now a setting, and `scripts/check_turn_direction.py` measures it in-game.
+- **The steering turned the wrong way (confirmed in-game).** SWG's X is east
+  and Z is north, and the original code tapped LEFT when D*'s next cell was to
+  the right. In the simulator that mismatch never arrives; with the sign
+  matched, it arrives every time. That's very likely why none of the 13 logged
+  v0.20 runs completed. `scripts/check_turn_direction.py` measured it, and the
+  default is now fixed.
 - **Obstacles are handled very inefficiently.** Every "try this cell" drives
   forward for a fixed 3–4 seconds, which is 48–64 m on a swoop for a 5–20 m
   target. A 400 m trip past a wall took 2–3 km of driving, and a 400 m long
