@@ -46,7 +46,7 @@ jedai/                 the bot
   control/             command channel, key client, master controller
   navigation/          navigator, D* Lite planner, SQLite grid map, target
                        trilateration, reading filters, run recorder, navmesh reader
-scripts/               run_navigator.py, review_run.py, build_navmesh_priors.py,
+scripts/               run_controller.py, run_navigator.py, review_run.py, build_navmesh_priors.py,
                        depth_check.py, calibrate_speed.py, check_turn_direction.py
 tools/                 capture -> crop -> auto-label -> train (see tools/README.md)
 models/                training records for each model; weights go here (not in git)
@@ -93,7 +93,7 @@ These are detector scores, not proof that the bot navigates. They haven't been c
 **Results (v1.0, tagged 27 Oct 2026)**
 - ✅ The bot reaches waypoints in open terrain **and in cities**. First city arrival: Theed, 302 m in 193 s, swoop then on foot.
 - ✅ Every run is recorded (`data/debug_logs/<time>_<target>/`): ticks, events, screenshots, a path map and an HTML report. `scripts/review_run.py` rebuilds the report for the latest run.
-- ✅ On foot it counts as arrived within 10 m; mounted, the stop distance allows for swoop inertia.
+- ✅ It counts as arrived within 10 m on foot, or 50 m mounted (swoop inertia).
 - ⚠️ Deep dead ends are still slow: the bot only learns a cell is blocked by bumping into it on foot. 1.1 fixes this with a map from Core3's navmeshes; 1.2 adds vision.
 - ⚠️ OCR occasionally misreads the distance (the arrow read as an extra 8). Readings are filtered against how far the bot has actually moved, so misreads no longer send it the wrong way.
 - History of how it got here, kept below: the simulator findings, the first in-game drive, and the full bug list in [docs/REORGANISATION.md](docs/REORGANISATION.md).
