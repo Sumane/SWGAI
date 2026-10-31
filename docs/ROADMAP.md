@@ -30,9 +30,23 @@ to the LLM.
 D* Lite over 5 m cells, trilateration of the waypoint, stuck recovery, run
 recorder.
 
-### 1.1 Navmesh prior + data capture (in progress)
+### 1.1 Navmesh verifier + data capture (in progress)
+
+**Project rule: what the bot may know at runtime.** Anything a player could
+know (starport and badge locations, quest steps, NPC names: wiki knowledge) is
+fine. Server internals more precise than a player can see (navmesh geometry,
+spawn tables, enemy positions) are not. The navmesh is a **teacher**: it grades
+the vision model offline and never steers the default bot. The bot builds its
+own map from what it sees and bumps into.
+
+Two variants, one switch (`planner.navmesh_prior`, or `run_navigator.py --navmesh-prior`):
+- **navmesh-free** (default, the real bot).
+- **navmesh prior** (comparison only): unexplored cells are priced from the
+  navmesh. Observed cells always win. Use `--fresh-map` for fair A/B runs,
+  because both variants write to the same grid map.
+
 - [x] Parse Core3 navmeshes for all planets (`jedai/navigation/navmesh.py`).
-- [ ] Load into D* as a prior. Observed cells always win.
+- [x] Navmesh-prior variant behind the switch, off by default.
 - [ ] Dataset logger: first-person frame (HUD hidden) + pose + heading at 2 Hz,
       on by default during runs.
 - [ ] Benchmark: 20 Theed runs, before vs after. Measure success, time, stuck count.

@@ -63,3 +63,25 @@ def test_roof_outside_ground_is_blocked(tmp_path):
     assert {a, b} == {0.0, 1.0}
     full = N.rasterise(nm, ground_only=False)
     assert full.fraction(20, 10) == 1.0 and full.fraction(20, 32) == 1.0
+
+
+def test_dstar_prior_steers_round_unwalkable(tmp_path):
+    """With a prior saying x in [10,30) is not walkable, D* plans round it; without, straight."""
+    from jedai.navigation.dstar_lite import DStarLite
+    from jedai.navigation.grid_db import NavDatabase
+
+    def wall(wx, wz):
+        return 0.0 if 10 <= wx < 30 and -40 <= wz < 40 else 1.0
+
+    def plan(prior):
+        db = NavDatabase(str(tmp_path / f"nav_{prior is None}.db"))
+        d = DStarLite(db, "naboo", prior=prior)
+        d.set_start(0, 0)
+        d.set_goal(60, 0)
+        d.initialise()
+        return d.get_planned_path(40)
+
+    straight = plan(None)
+    around = plan(wall)
+    assert any(10 <= x < 30 and abs(z) < 5 for x, z in straight)
+    assert not any(10 <= x < 30 and -40 <= z < 40 for x, z in around)

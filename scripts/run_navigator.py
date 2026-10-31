@@ -22,7 +22,12 @@ from jedai.navigation.runner import NavigationRunner
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--fresh-map", action="store_true", help="set the grid map aside and start empty")
+    ap.add_argument("--navmesh-prior", action="store_true",
+                    help="navmesh variant: price unexplored cells from Core3 navmesh maps "
+                         "(default is navmesh-free, the bot only knows what it has seen)")
     a = ap.parse_args()
+    if a.navmesh_prior:
+        settings.planner["navmesh_prior"] = True
     if a.fresh_map:
         db = settings.path("nav_db")
         if db.exists():

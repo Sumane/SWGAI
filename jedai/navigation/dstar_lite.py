@@ -90,8 +90,16 @@ class DStarLite:
                  cost_unexplored: float = COST_UNEXPLORED,
                  search_radius_m: float = SEARCH_RADIUS_M,
                  goal_reach_m: float = GOAL_REACH_M,
-                 cost_near_blocked: float = 10.0):
+                 cost_near_blocked: float = 10.0,
+                 prior=None, cost_prior_blocked: float = 30.0):
         self.db         = db
+        # Optional prior for UNEXPLORED cells only: prior(wx, wz) -> walkable
+        # fraction 0..1, or None where it knows nothing. Used by the navmesh
+        # variant (planner.navmesh_prior). Off by default: the bot should only
+        # know what it has seen. Observed CLEAR/BLOCKED cells always win.
+        self.prior = prior
+        self.cost_prior_blocked = cost_prior_blocked
+        self._prior_cache = {}
         self.planet     = planet
         self.resolution = resolution
         self.cost_clear      = cost_clear
@@ -226,6 +234,12 @@ class DStarLite:
             return self.cost_unexplored
         return COST_BLOCKED
 
+    def _prior_fraction(self, node):
+        if node not in self._prior_cache:
+            self._prior_cache[node] = self.prior(cell_to_world_centre(node[0], self.resolution),
+                                                 cell_to_world_centre(node[1], self.resolution))
+        return self._prior_cache[node]
+
     def _next_to_blocked(self, node) -> bool:
         cx, cz = node
         st = self._cell_states
@@ -244,6 +258,11 @@ class DStarLite:
         # every contact, and a 300 m wall took 15+ minutes to get round.
         if to_state == UNEXPLORED and self.cost_near_blocked > base and self._next_to_blocked(to_node):
             base = self.cost_near_blocked
+        if to_state == UNEXPLORED and self.prior is not None:
+            f = self._prior_fraction(to_node)
+            if f is not None:
+                # walkable -> as cheap as clear; not walkable -> dear but never a wall
+                base = self.cost_clear + (1.0 - f) * (self.cost_prior_blocked - self.cost_clear)
         # Diagonal movement costs sqrt(2) more
         if from_node[0] != to_node[0] and from_node[1] != to_node[1]:
             return base * math.sqrt(2)

@@ -146,6 +146,11 @@ planner:
   # 1.0 was clearly worse: it failed walls that 3.0 got round. Keep 3.0.
   cost_unexplored: 3.0
   cost_near_blocked: 10.0       # unexplored cell next to a known blocked one (walls are long)
+  # Variant switch. false = navmesh-free (default): the bot only knows what it
+  # has seen. true = Core3 navmesh maps price unexplored cells (comparison runs).
+  navmesh_prior: false
+  navmesh_prior_dir: data/navmesh_priors
+  cost_prior_blocked: 30.0      # unexplored cell the navmesh says is not walkable
   search_radius_m: 300.0
   goal_reach_m: 8.0
 

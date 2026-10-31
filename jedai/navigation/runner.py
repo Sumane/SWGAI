@@ -54,9 +54,12 @@ class NavigationRunner:
                                  cost_unexplored=p["cost_unexplored"],
                                  search_radius_m=p["search_radius_m"],
                                  goal_reach_m=p["goal_reach_m"],
-                                 cost_near_blocked=p.get("cost_near_blocked", 10.0))
+                                 cost_near_blocked=p.get("cost_near_blocked", 10.0),
+                                 prior=self._navmesh_prior(p),
+                                 cost_prior_blocked=p.get("cost_prior_blocked", 30.0))
         self.planner_active = False
         self.navigator = Navigator(self, self.cfg)
+        print(f"[runner] variant: {'NAVMESH PRIOR' if self.planner.prior else 'navmesh-free'}")
 
         self.target_name = ""
         self.last_valid_dist = 99999
@@ -76,6 +79,24 @@ class NavigationRunner:
         self.last_raw_dist = None
 
     # =========================================================================
+    def _navmesh_prior(self, p):
+        """
+        Two variants, one switch (planner.navmesh_prior):
+          false (default) - navmesh-free: the bot only knows what it has seen.
+          true            - Core3 navmesh maps (data/navmesh_priors) price
+                            unexplored cells. For comparison runs only.
+        Either way the navmesh is still used offline to grade the vision model.
+        """
+        if not p.get("navmesh_prior", False):
+            return None
+        from .navmesh import PriorIndex
+        idx = PriorIndex(p.get("navmesh_prior_dir", "data/navmesh_priors"))
+        if not idx.maps.get(self.planet):
+            print(f"[runner] navmesh_prior on, but no maps for {self.planet}: running navmesh-free")
+            return None
+        planet = self.planet
+        return lambda wx, wz: idx.fraction(planet, wx, wz)
+
     def should_stop(self) -> bool:
         return kill_pressed(self.s.kill_key, self.s)
 
