@@ -30,7 +30,7 @@ The project went dormant after that README, then was rebuilt from scratch in 202
 | 2017 step | What actually happened |
 |---|---|
 | **1. Making sense of its environment** (YOLO on the game display) | Built, and the 2017 instinct was right. Eight YOLO detectors (YOLOv8n/s and YOLO11n) read the HUD: waypoint group, panel and components, waypoint arrow, distance digits, minimap, coordinate field and coordinate digits. All score 0.99+ mAP50 (table below). EasyOCR reads waypoint names. The unglamorous part was building the training data: capture, frame extraction, clustering, auto-labelling. |
-| **2. Path finding** | Built, and it became the bulk of the work. The navigator went through many versions (header v0.02 to v0.20) and three architectures: speed-based obstacle handling, then wall-hugging with "frustration" exploration, then a D* Lite planner over a persistent SQLite grid map. The bot can reach a waypoint in open terrain. Cities still beat it. The "imagination" problem from 2017 is real. |
+| **2. Path finding** | Built, and it became the bulk of the work. The navigator went through many versions (header v0.02 to v0.20) and three architectures: speed-based obstacle handling, then wall-hugging with "frustration" exploration, then a D* Lite planner over a persistent SQLite grid map. **v1.0 (Oct 2026): the bot reaches its waypoint, cities included** (Theed, 302 m in 193 s). The "imagination" problem from 2017 is real, and is what the vision work in 1.1+ is for. |
 | **3. Interacting with the environment** (combat and skill trees) | Not built yet. It's designed as a council of specialist agents (below) rather than one learning process. |
 | **4. Enhancing current levels of skill** ("revisit at that point") | Revisited. This became a five-tier completion target and a plan for the bot to commission its own tools. |
 
@@ -44,14 +44,15 @@ config/settings.yaml   one file for paths, monitor, planet, keys and tuning
 jedai/                 the bot
   perception/          screen capture + HUD reading (the 8 YOLO models, OCR)
   control/             command channel, key client, master controller
-  navigation/          navigator state machine, D* Lite planner, SQLite grid map
-scripts/               run_controller.py, run_navigator.py,
-                       calibrate_speed.py, check_turn_direction.py
+  navigation/          navigator, D* Lite planner, SQLite grid map, target
+                       trilateration, reading filters, run recorder, navmesh reader
+scripts/               run_navigator.py, review_run.py, build_navmesh_priors.py,
+                       depth_check.py, calibrate_speed.py, check_turn_direction.py
 tools/                 capture -> crop -> auto-label -> train (see tools/README.md)
 models/                training records for each model; weights go here (not in git)
 tests/                 offline tests, including a simulated drive
 archive/navigation/    every earlier navigator version, untouched
-docs/                  reorganisation notes and the September 2026 status review
+docs/                  ROADMAP.md, reorganisation notes, September 2026 status review
 ```
 
 The code was reorganised in October 2026 from two messy drive folders. The
@@ -89,14 +90,13 @@ These are detector scores, not proof that the bot navigates. They haven't been c
 - The waypoint arrow is a **relative bearing**, never a compass direction.
 - SWGEmu's ground plane is **X/Z**, not X/Y.
 
-**Results**
-- ✅ In my own testing, the bot reaches waypoints in open terrain with no obstacles.
-- 🗺️ The nav database has mapped 15,192 grid cells on Naboo: 2,523 clear, 444 blocked and the rest unexplored.
-- ⚠️ None of the 13 logged runs is marked complete, so arrival isn't being recorded properly yet. There's no automated measure of success rate.
-- ❌ Cities: the bot gets close, then loops, error-correcting back to the same spot.
-  - The cause: swoop inertia makes logged coordinates lag the true position by metres, which poisons the grid map. So the bot needs to **dismount and walk in cities**.
-  - Planned trigger: SWG prints *"You have entered…"* about 200 m before a city boundary. A system-message region filter plus a per-letter YOLO text reader would let any system message fire a function, and dismounting would be the first.
-  - Tried and failed: steering towards the deepest region (left, centre or right) of a Depth Anything V2 heatmap. It couldn't handle small obstacles.
+**Results (v1.0, tagged 27 Oct 2026)**
+- ✅ The bot reaches waypoints in open terrain **and in cities**. First city arrival: Theed, 302 m in 193 s, swoop then on foot.
+- ✅ Every run is recorded (`data/debug_logs/<time>_<target>/`): ticks, events, screenshots, a path map and an HTML report. `scripts/review_run.py` rebuilds the report for the latest run.
+- ✅ On foot it counts as arrived within 10 m; mounted, the stop distance allows for swoop inertia.
+- ⚠️ Deep dead ends are still slow: the bot only learns a cell is blocked by bumping into it on foot. 1.1 fixes this with a map from Core3's navmeshes; 1.2 adds vision.
+- ⚠️ OCR occasionally misreads the distance (the arrow read as an extra 8). Readings are filtered against how far the bot has actually moved, so misreads no longer send it the wrong way.
+- History of how it got here, kept below: the simulator findings, the first in-game drive, and the full bug list in [docs/REORGANISATION.md](docs/REORGANISATION.md).
 
 **What the simulator showed.** Driving the real navigator code through a
 simulated world (`tests/test_simulated_drive.py`) turned up two things:
@@ -130,18 +130,12 @@ If the bot gets stuck twice in the same place while mounted, it dismounts and
 carries on on foot, confirming blocked cells for D* to plan around. Details are
 in [docs/REORGANISATION.md](docs/REORGANISATION.md).
 
-**Planned rebuild (not in this repo yet).** A code review of the D* Lite version found seven bugs:
-- an alignment condition that could never be met
-- wrong CLEAR marking
-- a cache miss
-- an unexplored-cell cost that caused backward routing
-- a malformed f-string
-- an unnormalised cross product
-- node loss
-
-The replacement design has two parts:
-- trilateration of the target from several waypoint-distance readings, by least squares (**done**, Oct 2026: `jedai/navigation/target_estimator.py`)
-- an A* planner with string-pulling over the sparse SQLite grid
+**What fixed it (summary).** A code review of the old D\* Lite version found seven bugs (alignment condition that could never be met, wrong CLEAR marking, cache miss, an unexplored-cell cost causing backward routing, a malformed f-string, an unnormalised cross product, node loss). All were fixed in place rather than replacing D\* with A\*, together with:
+- trilateration of the target from waypoint-distance readings (`jedai/navigation/target_estimator.py`)
+- an admissible D\* heuristic and a 300 m "carrot" goal
+- reading filters that reject impossible coordinate/distance jumps (`reading_filter.py`)
+- stuck detection by grinding, back-off-and-pivot recovery, and dismounting after repeated sticking
+- marking only the cell D\* was trying to enter as blocked, never the cells beside it
 
 ## The bigger plan
 
@@ -157,7 +151,7 @@ Fully complete SWGEmu, in tiers:
 | T4 | Mastery | All 32 professions, Jedi Master, all badges, space |
 | T5 | Transcendence | Open-ended self-improvement loop |
 
-Current status: **T1, navigation**.
+Current status: **T1, navigation v1.0 done; 1.1 (navmesh map + vision) in progress.** The step-by-step plan to Jedi is in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ### Target architecture (mostly design)
 
