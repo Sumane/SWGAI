@@ -275,10 +275,21 @@ class NavigationRunner:
         self.apply_vehicle(vehicles[int(choice)][0]
                            if choice.isdigit() and int(choice) < len(vehicles) else default)
 
-    def choose_waypoint(self):
+    def choose_waypoint(self, name: str | None = None):
+        """Pick a waypoint. With `name` (harness use) pick it without asking:
+        exact name match first, then case-insensitive substring."""
         waypoints = self.scan_for_waypoints()
         if not waypoints:
             print("No waypoints found.")
+            return None
+        if name is not None:
+            for wp in waypoints:
+                if wp["name"] == name:
+                    return wp
+            for wp in waypoints:
+                if name.lower() in wp["name"].lower():
+                    return wp
+            print(f"Waypoint '{name}' not found in {[w['name'] for w in waypoints]}")
             return None
         print("\n--- WAYPOINTS FOUND ---")
         for i, wp in enumerate(waypoints):
@@ -289,12 +300,19 @@ class NavigationRunner:
             return None
         return waypoints[int(choice)]
 
-    def navigate(self):
+    def navigate(self, target_name: str | None = None) -> str:
+        """
+        Drive to a waypoint. Returns the outcome string:
+        "arrived", "no_waypoint", "stopped", a stop reason, or "crashed: ...".
+        target_name=None asks on the console (scripts/run_navigator.py);
+        the harness passes a name and nothing is asked.
+        """
         c = self.cfg
-        self.choose_vehicle()
-        target = self.choose_waypoint()
+        if target_name is None:
+            self.choose_vehicle()
+        target = self.choose_waypoint(target_name)
         if target is None:
-            return
+            return "no_waypoint"
 
         self.target_name = target["name"]
         print(f"\n🎯  Target: '{self.target_name}' ({target['distance']}m)")
@@ -341,6 +359,7 @@ class NavigationRunner:
             self.rec.close(result, *self._cells_for_report())
         if arrived:
             print("\n\n🏁  SUCCESS!")
+        return result
 
     _end_reason = "stopped"
     _approaching = False
