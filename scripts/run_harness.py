@@ -20,7 +20,18 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+def _sigterm_as_interrupt():
+    """harness_live.py stops us with SIGTERM: turn it into KeyboardInterrupt so
+    the finally blocks run and no movement key is left held down."""
+    import signal
+
+    def handler(signum, frame):
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, handler)
+
+
 def main():
+    _sigterm_as_interrupt()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--max-steps", type=int)
     ap.add_argument("--minutes", type=float)
