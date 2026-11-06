@@ -321,6 +321,10 @@ class NavigationRunner:
 
         self.navigator.reset()
         self.planner_active = False
+        # per-run fields: the harness calls navigate() many times on one runner
+        self._end_reason = "stopped"
+        self._approaching = False
+        self._approach_best, self._approach_t, self._approach_off_until = 1e9, 0.0, 0.0
         self.min_dist_seen = self.last_valid_dist = target["distance"]
         self.dist_gate.reset()        # the list's reading may itself be a misread
         self.close_read_count = 0

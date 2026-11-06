@@ -157,3 +157,10 @@ planner:
 tools:
   tesseract_cmd: ""             # only for tools/validation/test_hud_ocr.py, e.g. "E:/New folder/tesseract.exe"
   label_studio_exe: ""          # only for tools/labeling/label_studio.bat
+
+# Harness v0 (scripts/run_harness.py)
+harness:
+  waypoint_command: "/waypoint {x:.0f} {z:.0f} {label}"   # confirm the exact syntax in-game
+  waypoint_settle_s: 1.5
+  mount_key: ""            # toolbar key that calls the vehicle; empty = mount skill disabled
+  mount_settle_s: 3.0

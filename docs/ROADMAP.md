@@ -104,6 +104,9 @@ Requirements from Core3's `glowing.lua` (Village progression):
   what to try next. These are suggestions for Marc/Claude, not auto-applied.
 
 ### 6.x Harness
+- [x] **Harness v0 (6 Nov 2026):** world state (SQLite), skill interface, skill log,
+      rule-based badge collector (System 2 v0), supervisor. `python scripts/run_harness.py`.
+      Travel points + badge areas in `jedai/data/world_points.json`.
 - 6.1 One process supervisor: game, System 1 loop, System 2, System 3, recorder, kill switch.
 - 6.2 Rehearsal mode on Marc's server: GM teleport to the start of a test, reset,
   repeat. Real runs never use GM commands.

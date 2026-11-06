@@ -1,5 +1,8 @@
 # Tasks for the local Qwen agent
 
+> **T01–T06 are done** (built by Claude, 6 Nov 2026, in `jedai/harness/`). They stay here as
+> examples of the task format. New tasks get the next numbers.
+
 Each `Txx_*.md` file is one self-contained job. Point Qwen at:
 
 1. `docs/qwen_tasks/00_CONTEXT.md` (always: the project rules)
