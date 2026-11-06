@@ -2,7 +2,7 @@
 config/settings.local.yaml
 
 # Data: datasets, screenshots, runs, nav map, command file (set paths.data_dir)
-data/
+/data/
 
 # Model weights and checkpoints (attach to a GitHub Release instead)
 *.pt

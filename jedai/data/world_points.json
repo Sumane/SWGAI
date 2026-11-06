@@ -1,0 +1,873 @@
+{
+ "corellia": {
+  "travel": [
+   {
+    "name": "Coronet Shuttle B",
+    "x": -329.77,
+    "z": -4641.23,
+    "height": 28.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Coronet Shuttle A",
+    "x": -25.67,
+    "z": -4409.78,
+    "height": 28.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Coronet Starport",
+    "x": -66.76,
+    "z": -4711.33,
+    "height": 28.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Vreni Island Shuttle",
+    "x": -5551.95,
+    "z": -6059.97,
+    "height": 15.89,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Tyrena Shuttle B",
+    "x": -5600.64,
+    "z": -2790.74,
+    "height": 21.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Tyrena Shuttle A",
+    "x": -5005.35,
+    "z": -2386.98,
+    "height": 21.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Tyrena Starport",
+    "x": -5003.06,
+    "z": -2228.37,
+    "height": 21.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Kor Vella Shuttleport",
+    "x": -3775.25,
+    "z": 3234.22,
+    "height": 31.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Kor Vella Starport",
+    "x": -3157.28,
+    "z": 2876.2,
+    "height": 31.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Doaba Guerfel Shuttleport",
+    "x": 3085.5,
+    "z": 4993.01,
+    "height": 280.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Doaba Guerfel Starport",
+    "x": 3349.89,
+    "z": 5598.14,
+    "height": 308.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Bela Vistal Shuttleport A",
+    "x": 6644.27,
+    "z": -5922.52,
+    "height": 330.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Bela Vistal Shuttleport B",
+    "x": 6930.8,
+    "z": -5534.89,
+    "height": 330.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   }
+  ],
+  "badges": [
+   {
+    "key": "badge_agrilat_swap",
+    "badge_id": 20,
+    "x": 1387.0,
+    "z": 3749.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_bela_vistal_fountain",
+    "badge_id": 81,
+    "x": 6767.0,
+    "z": -5617.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_rebel_hideout",
+    "badge_id": 78,
+    "x": -6530.0,
+    "z": 5967.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_rogue_corsec_base",
+    "badge_id": 79,
+    "x": 5291.0,
+    "z": 1494.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_tyrena_theater",
+    "badge_id": 80,
+    "x": -5418.0,
+    "z": -6248.0,
+    "radius": 30.0
+   }
+  ]
+ },
+ "dantooine": {
+  "travel": [
+   {
+    "name": "Dantooine Mining Outpost",
+    "x": -637.0,
+    "z": 2504.4,
+    "height": 3.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Dantooine Imperial Outpost",
+    "x": -4208.66,
+    "z": -2350.24,
+    "height": 3.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Dantooine Agro Outpost",
+    "x": 1569.66,
+    "z": -6415.76,
+    "height": 4.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Abandoned Rebel Base",
+    "x": -6799.6,
+    "z": 5574.3,
+    "height": 46.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   }
+  ],
+  "badges": [
+   {
+    "key": "badge_dantari_village1",
+    "badge_id": 84,
+    "x": -3929.0,
+    "z": -5632.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_dantari_village2",
+    "badge_id": 85,
+    "x": -7185.0,
+    "z": -883.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_jedi_temple",
+    "badge_id": 30,
+    "x": 4195.0,
+    "z": 5203.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_rebel_base",
+    "badge_id": 31,
+    "x": -6836.0,
+    "z": 5520.0,
+    "radius": 30.0
+   }
+  ]
+ },
+ "dathomir": {
+  "travel": [
+   {
+    "name": "Trade Outpost",
+    "x": 618.89,
+    "z": 3092.01,
+    "height": 6.04,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Science Outpost",
+    "x": -49.02,
+    "z": -1584.73,
+    "height": 18.0,
+    "kind": "starport",
+    "interplanetary": true
+   }
+  ],
+  "badges": [
+   {
+    "key": "badge_crashed_ship",
+    "badge_id": 82,
+    "x": 5676.0,
+    "z": 1901.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_escape_pod",
+    "badge_id": 27,
+    "x": -4427.0,
+    "z": 586.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_imperial_prison",
+    "badge_id": 83,
+    "x": -6141.0,
+    "z": 973.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_misty_falls_1",
+    "badge_id": 28,
+    "x": 3558.0,
+    "z": 1554.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_misty_falls_2",
+    "badge_id": 29,
+    "x": 3021.0,
+    "z": 1289.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_sarlacc",
+    "badge_id": 26,
+    "x": -2101.0,
+    "z": 3165.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_tarpit",
+    "badge_id": 25,
+    "x": 652.0,
+    "z": -4888.0,
+    "radius": 30.0
+   }
+  ]
+ },
+ "endor": {
+  "travel": [
+   {
+    "name": "Smuggler Outpost",
+    "x": -950.59,
+    "z": 1553.41,
+    "height": 73.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Research Outpost",
+    "x": 3201.66,
+    "z": -3499.76,
+    "height": 24.0,
+    "kind": "starport",
+    "interplanetary": true
+   }
+  ],
+  "badges": [
+   {
+    "key": "badge_dulok_villlage",
+    "badge_id": 88,
+    "x": 5921.0,
+    "z": -2514.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_ewok_tree_villlage",
+    "badge_id": 86,
+    "x": 4661.0,
+    "z": -2425.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_imp_outpost",
+    "badge_id": 89,
+    "x": -4628.0,
+    "z": -2273.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_lake_villlage",
+    "badge_id": 87,
+    "x": 1454.0,
+    "z": -3272.0,
+    "radius": 30.0
+   }
+  ]
+ },
+ "lok": {
+  "travel": [
+   {
+    "name": "Nym's Stronghold",
+    "x": 478.93,
+    "z": 5511.96,
+    "height": 9.0,
+    "kind": "starport",
+    "interplanetary": true
+   }
+  ],
+  "badges": [
+   {
+    "key": "badge_imp_outpost",
+    "badge_id": 98,
+    "x": -1814.0,
+    "z": -3086.0,
+    "radius": 10.0
+   },
+   {
+    "key": "badge_kimogila_skeleton",
+    "badge_id": 99,
+    "x": 4562.0,
+    "z": -1156.0,
+    "radius": 10.0
+   },
+   {
+    "key": "badge_volcano",
+    "badge_id": 24,
+    "x": 3091.0,
+    "z": -4638.0,
+    "radius": 10.0
+   }
+  ]
+ },
+ "naboo": {
+  "travel": [
+   {
+    "name": "Keren Starport",
+    "x": 1371.59,
+    "z": 2747.9,
+    "height": 13.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Keren Shuttleport South",
+    "x": 1567.52,
+    "z": 2837.88,
+    "height": 25.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Keren Shuttleport",
+    "x": 2021.0,
+    "z": 2525.68,
+    "height": 19.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Theed Shuttle A",
+    "x": -5856.11,
+    "z": 4172.16,
+    "height": 6.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Theed Shuttle B",
+    "x": -5005.0,
+    "z": 4072.0,
+    "height": 6.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Theed Shuttle C",
+    "x": -5411.02,
+    "z": 4322.33,
+    "height": 6.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Theed Spaceport",
+    "x": -4858.83,
+    "z": 4164.07,
+    "height": 5.95,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "The Lake Retreat",
+    "x": -5494.42,
+    "z": -21.84,
+    "height": -150.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Moenia",
+    "x": 4731.17,
+    "z": -4677.54,
+    "height": 4.17,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Moenia Shuttleport",
+    "x": 4961.94,
+    "z": -4892.7,
+    "height": 3.75,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Dee'ja Peak Shuttleport",
+    "x": 5331.94,
+    "z": -1576.67,
+    "height": 327.03,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Kaadara Starport",
+    "x": 5280.2,
+    "z": 6688.05,
+    "height": -192.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Kaadara Shuttleport",
+    "x": 5123.39,
+    "z": 6616.03,
+    "height": -192.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Emperor's Retreat",
+    "x": 2442.8,
+    "z": -3916.8,
+    "height": 292.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   }
+  ],
+  "badges": [
+   {
+    "key": "badge_amidalas_sandy_beach",
+    "badge_id": 77,
+    "x": -5828.0,
+    "z": -93.0,
+    "radius": 10.0
+   },
+   {
+    "key": "badge_deeja_falls_top",
+    "badge_id": 76,
+    "x": 5161.0,
+    "z": -1627.0,
+    "radius": 10.0
+   },
+   {
+    "key": "badge_gungan_sacred_place",
+    "badge_id": 19,
+    "x": -2000.0,
+    "z": -5429.0,
+    "radius": 10.0
+   },
+   {
+    "key": "badge_theed_falls_bottom",
+    "badge_id": 75,
+    "x": -4614.0,
+    "z": 4261.0,
+    "radius": 10.0
+   }
+  ]
+ },
+ "rori": {
+  "travel": [
+   {
+    "name": "Restuss Starport",
+    "x": 5340.0,
+    "z": 5734.0,
+    "height": 80.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Restuss Shuttleport",
+    "x": 5211.0,
+    "z": 5791.0,
+    "height": 80.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Narmle Starport",
+    "x": -5374.07,
+    "z": -2188.61,
+    "height": 80.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Narmle Shuttleport",
+    "x": -5255.41,
+    "z": -2161.63,
+    "height": 80.66,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Rebel Outpost",
+    "x": 3691.9,
+    "z": -6403.44,
+    "height": 96.0,
+    "kind": "starport",
+    "interplanetary": true
+   }
+  ],
+  "badges": [
+   {
+    "key": "badge_imp_camp",
+    "badge_id": 96,
+    "x": -5633.0,
+    "z": -5661.0,
+    "radius": 10.0
+   },
+   {
+    "key": "badge_imp_hyperdrive_fac",
+    "badge_id": 97,
+    "x": -1130.0,
+    "z": 4544.0,
+    "radius": 10.0
+   },
+   {
+    "key": "badge_kobala_spice_mine",
+    "badge_id": 94,
+    "x": 7304.0,
+    "z": 63.0,
+    "radius": 10.0
+   },
+   {
+    "key": "badge_rebel_outpost",
+    "badge_id": 95,
+    "x": 3664.0,
+    "z": -6501.0,
+    "radius": 10.0
+   }
+  ]
+ },
+ "talus": {
+  "travel": [
+   {
+    "name": "Dearic Starport",
+    "x": 263.58,
+    "z": -2952.13,
+    "height": 6.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Dearic Shuttleport",
+    "x": 699.3,
+    "z": -3041.42,
+    "height": 6.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Talus Imperial Outpost",
+    "x": -2227.4,
+    "z": 2319.9,
+    "height": 20.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Nashal Shuttleport",
+    "x": 4334.58,
+    "z": 5431.04,
+    "height": 9.9,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Nashal Starport",
+    "x": 4453.72,
+    "z": 5354.33,
+    "height": 2.0,
+    "kind": "starport",
+    "interplanetary": true
+   }
+  ],
+  "badges": [
+   {
+    "key": "badge_aqualish_cave",
+    "badge_id": 93,
+    "x": -4425.0,
+    "z": -1414.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_creature_village",
+    "badge_id": 90,
+    "x": 4300.0,
+    "z": 1020.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_imp_base",
+    "badge_id": 91,
+    "x": -2185.0,
+    "z": 2383.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_imp_vs_reb_battle",
+    "badge_id": 92,
+    "x": -2595.0,
+    "z": 3724.0,
+    "radius": 30.0
+   }
+  ]
+ },
+ "tatooine": {
+  "travel": [
+   {
+    "name": "Mos Eisley Shuttleport",
+    "x": 3416.69,
+    "z": -4648.14,
+    "height": 5.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Mos Eisley Starport",
+    "x": 3599.89,
+    "z": -4780.45,
+    "height": 5.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Bestine Starport",
+    "x": -1361.19,
+    "z": -3600.03,
+    "height": 12.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Bestine Shuttleport",
+    "x": -1098.48,
+    "z": -3563.53,
+    "height": 12.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Mos Espa Shuttleport South",
+    "x": -2897.09,
+    "z": 1933.41,
+    "height": 5.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Mos Espa Shuttleport West",
+    "x": -3112.13,
+    "z": 2176.96,
+    "height": 5.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Mos Espa Starport",
+    "x": -2833.16,
+    "z": 2107.38,
+    "height": 5.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Mos Espa Shuttleport East",
+    "x": -2803.51,
+    "z": 2182.96,
+    "height": 5.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Anchorhead Shuttleport",
+    "x": 47.57,
+    "z": -5338.91,
+    "height": 52.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Mos Entha Starport",
+    "x": 1266.1,
+    "z": 3065.14,
+    "height": 7.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Mos Entha Shuttle B",
+    "x": 1395.45,
+    "z": 3467.01,
+    "height": 7.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Mos Entha Shuttle A",
+    "x": 1730.88,
+    "z": 3184.61,
+    "height": 7.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   },
+   {
+    "name": "Jabba's Palace",
+    "x": -6171.6,
+    "z": -6381.5,
+    "height": 90.0,
+    "kind": "shuttleport",
+    "interplanetary": false
+   }
+  ],
+  "badges": [
+   {
+    "key": "badge_bens_hut",
+    "badge_id": 12,
+    "x": -4512.0,
+    "z": -2270.0,
+    "radius": 10.0
+   },
+   {
+    "key": "badge_escape_pod",
+    "badge_id": 15,
+    "x": -3930.0,
+    "z": -4425.0,
+    "radius": 10.0
+   },
+   {
+    "key": "badge_krayt_graveyard",
+    "badge_id": 18,
+    "x": 7396.0,
+    "z": 4478.0,
+    "radius": 10.0
+   },
+   {
+    "key": "badge_krayt_skeleton",
+    "badge_id": 14,
+    "x": -4650.0,
+    "z": -4363.0,
+    "radius": 10.0
+   },
+   {
+    "key": "badge_lars_homestead",
+    "badge_id": 17,
+    "x": -2579.0,
+    "z": -5500.0,
+    "radius": 10.0
+   },
+   {
+    "key": "badge_sarlacc_pit",
+    "badge_id": 16,
+    "x": -6176.0,
+    "z": -3372.0,
+    "radius": 10.0
+   },
+   {
+    "key": "badge_tusken_pool",
+    "badge_id": 13,
+    "x": -3971.0,
+    "z": 6267.0,
+    "radius": 10.0
+   }
+  ]
+ },
+ "yavin4": {
+  "travel": [
+   {
+    "name": "Yavin IV Labor Outpost",
+    "x": -6921.67,
+    "z": -5726.52,
+    "height": 73.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Yavin IV Mining Outpost",
+    "x": -267.24,
+    "z": 4896.3,
+    "height": 35.0,
+    "kind": "starport",
+    "interplanetary": true
+   },
+   {
+    "name": "Yavin IV Imperial Outpost",
+    "x": 4054.1,
+    "z": -6216.9,
+    "height": 37.0,
+    "kind": "starport",
+    "interplanetary": true
+   }
+  ],
+  "badges": [
+   {
+    "key": "badge_temple_exar_kun",
+    "badge_id": 23,
+    "x": 5097.0,
+    "z": 5537.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_temple_woolamander",
+    "badge_id": 21,
+    "x": 519.0,
+    "z": -646.0,
+    "radius": 30.0
+   },
+   {
+    "key": "badge_yav_temple_blueleaf",
+    "badge_id": 22,
+    "x": -875.0,
+    "z": -2047.0,
+    "radius": 30.0
+   }
+  ]
+ }
+}
