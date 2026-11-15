@@ -28,7 +28,7 @@ Fixes in v0.21 (see docs/REORGANISATION.md):
 
 import math
 import heapq
-from .grid_db import (NavDatabase, UNEXPLORED, CLEAR, BLOCKED,
+from .grid_db import (SUSPECT, STATE_NAMES, NavDatabase, UNEXPLORED, CLEAR, BLOCKED,
                       RES_NORMAL, world_to_cell, cell_to_world_centre)
 
 # Traversal costs
@@ -91,7 +91,8 @@ class DStarLite:
                  search_radius_m: float = SEARCH_RADIUS_M,
                  goal_reach_m: float = GOAL_REACH_M,
                  cost_near_blocked: float = 10.0,
-                 prior=None, cost_prior_blocked: float = 30.0):
+                 prior=None, cost_prior_blocked: float = 30.0,
+                 cost_suspect: float = 15.0, bound_margin_m: float = 150.0):
         self.db         = db
         # Optional prior for UNEXPLORED cells only: prior(wx, wz) -> walkable
         # fraction 0..1, or None where it knows nothing. Used by the navmesh
@@ -122,6 +123,12 @@ class DStarLite:
 
         # Local cell state cache — avoids hitting DB on every neighbour lookup
         self._cell_states = {}
+        # Search box (cells). 7 Nov: the grid had no edge, so when the start
+        # was walled in the search never ran out of cells and hit the 200k
+        # iteration cap on every tick (1-6 s per tick: the bot couldn't steer).
+        self._bounds = None
+        self.bound_margin_m = float(bound_margin_m)
+        self.cost_suspect = float(cost_suspect)
 
     # ------------------------------------------------------------------
     # Setup
@@ -149,6 +156,9 @@ class DStarLite:
         if self._goal is None or self._start is None:
             raise RuntimeError("set_goal and set_start must be called before initialise()")
 
+        m = int(self.bound_margin_m / self.resolution) + 1
+        self._bounds = (min(self._start[0], self._goal[0]) - m, max(self._start[0], self._goal[0]) + m,
+                        min(self._start[1], self._goal[1]) - m, max(self._start[1], self._goal[1]) + m)
         self._g.clear()
         self._rhs.clear()
         self._open.clear()
@@ -216,13 +226,17 @@ class DStarLite:
         return (g_rhs_min + h + self._km, g_rhs_min)
 
     def _neighbours(self, node):
-        """8-connected grid neighbours."""
+        """8-connected grid neighbours, inside the search box."""
         cx, cz = node
+        b = self._bounds
         for dcx in (-1, 0, 1):
             for dcz in (-1, 0, 1):
                 if dcx == 0 and dcz == 0:
                     continue
-                yield (cx + dcx, cz + dcz)
+                nx, nz = cx + dcx, cz + dcz
+                if b is not None and not (b[0] <= nx <= b[1] and b[2] <= nz <= b[3]):
+                    continue
+                yield (nx, nz)
 
     def _state(self, node) -> int:
         return self._cell_states.get(node, UNEXPLORED)
@@ -232,6 +246,8 @@ class DStarLite:
             return self.cost_clear
         if state == UNEXPLORED:
             return self.cost_unexplored
+        if state == SUSPECT:
+            return self.cost_suspect
         return COST_BLOCKED
 
     def _prior_fraction(self, node):
@@ -243,8 +259,9 @@ class DStarLite:
     def _next_to_blocked(self, node) -> bool:
         cx, cz = node
         st = self._cell_states
-        return (st.get((cx + 1, cz)) == BLOCKED or st.get((cx - 1, cz)) == BLOCKED or
-                st.get((cx, cz + 1)) == BLOCKED or st.get((cx, cz - 1)) == BLOCKED)
+        wall = (BLOCKED, SUSPECT)                   # a suspect cell is probably wall too
+        return (st.get((cx + 1, cz)) in wall or st.get((cx - 1, cz)) in wall or
+                st.get((cx, cz + 1)) in wall or st.get((cx, cz - 1)) in wall)
 
     def _edge_cost(self, from_node, to_node) -> float:
         """Cost to move from from_node to to_node."""
@@ -344,6 +361,12 @@ class DStarLite:
         if new_start == self._start:
             self._ensure_consistent()
             return  # same cell, nothing else to do
+        b = self._bounds
+        if b is not None and not (b[0] <= new_start[0] <= b[1] and b[2] <= new_start[1] <= b[3]):
+            # walked out of the search box: start again with a box round here
+            self._start = self._last_start = new_start
+            self.initialise()
+            return
 
         # Paper: km += h(s_last, s_start); s_last = s_start
         if self._last_start is not None:
@@ -391,7 +414,9 @@ class DStarLite:
         self._cell_states[node] = new_state
 
         # Persist to DB
-        if new_state == BLOCKED:
+        if new_state == SUSPECT:
+            self.db._set_state(self.planet, wx, wz, SUSPECT, self.resolution)
+        elif new_state == BLOCKED:
             self.db.mark_blocked(self.planet, wx, wz, self.resolution)
         elif new_state == CLEAR:
             self.db.mark_clear(self.planet, wx, wz, self.resolution)
@@ -402,8 +427,8 @@ class DStarLite:
         self._compute_shortest_path()
 
         print(f"[D*] Cell updated ({wx:.0f},{wz:.0f}) "
-              f"{['unexplored','clear','blocked'][old_state]} → "
-              f"{['unexplored','clear','blocked'][new_state]} | "
+              f"{STATE_NAMES.get(old_state, old_state)} → "
+              f"{STATE_NAMES.get(new_state, new_state)} | "
               f"path_cost={self._g.get(self._start, float('inf')):.1f}")
 
     def next_waypoint(self) -> tuple[float, float] | None:

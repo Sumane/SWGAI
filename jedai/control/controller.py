@@ -80,6 +80,14 @@ class MasterController:
                 self.input.press(ch)
                 time.sleep(0.02)
 
+        elif cmd == "CLICK":
+            if hasattr(self.input, "click"):
+                self.input.click(instruction["x"], instruction["y"], instruction.get("button", "left"))
+
+        elif cmd == "MOVE":
+            if hasattr(self.input, "move"):
+                self.input.move(instruction["x"], instruction["y"])
+
         elif cmd == "RELEASE_ALL":
             self.release_all()
 

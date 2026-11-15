@@ -34,19 +34,20 @@ recorder.
 
 **Project rule: what the bot may know at runtime.** Anything a player could
 know (starport and badge locations, quest steps, NPC names: wiki knowledge) is
-fine. Server internals more precise than a player can see (navmesh geometry,
-spawn tables, enemy positions) are not. The navmesh is a **teacher**: it grades
-the vision model offline and never steers the default bot. The bot builds its
-own map from what it sees and bumps into.
+fine. Server internals more precise than a player can see (spawn tables, enemy
+positions, live server telemetry) are not.
 
-Two variants, one switch (`planner.navmesh_prior`, or `run_navigator.py --navmesh-prior`):
-- **navmesh-free** (default, the real bot).
-- **navmesh prior** (comparison only): unexplored cells are priced from the
-  navmesh. Observed cells always win. Use `--fresh-map` for fair A/B runs,
-  because both variants write to the same grid map.
+**The navmesh is the exception (Marc, 8 Nov 2026).** The navmesh-free bot walled
+itself in too often and cost too much time, so the navmesh is now the base map
+at runtime (`planner.navmesh_prior: true`): unexplored cells are priced from it,
+and the bot's own map changes only where it actually gets stuck (2 m cells, a
+first bump makes a cell "suspect", a second makes it a wall). It covers cities
+and points of interest only; open ground is still learned by bumping.
+The navmesh-free variant stays behind the same switch for comparison, and
+replacing the navmesh with the bot's own vision (1.2) is still the long-term aim.
 
 - [x] Parse Core3 navmeshes for all planets (`jedai/navigation/navmesh.py`).
-- [x] Navmesh-prior variant behind the switch, off by default.
+- [x] Navmesh-prior variant behind the switch (on by default since 8 Nov).
 - [ ] Dataset logger: first-person frame (HUD hidden) + pose + heading at 2 Hz,
       on by default during runs.
 - [ ] Benchmark: 20 Theed runs, before vs after. Measure success, time, stuck count.
@@ -169,5 +170,16 @@ Claude reviews the diff before it's merged.
 
 ## 4. Order
 
-1.1 finish → 1.5 planet travel → 3.1 exploration badges (first real Jedi progress)
-→ 4.1/4.2 simple System 2 → 1.2 vision → 2.0 confined areas → 3.2–3.6 → 5.x → 6.3.
+**Agreed 10 Nov 2026 (replaces the earlier order):** stay inside cities and
+avoid combat until the very end.
+
+1. Die and recover: detect death, clone, exit the cloning facility (first
+   indoor, multi-level navigation).
+2. City skills: mission, bazaar, bank and shuttleport/starport terminals
+   (planet travel, 1.5), city points of interest. One shared window module.
+3. Every in-game command becomes a macro key or a harness tool call, as met.
+4. Test the client chat log (`/logChat`): stays on, and what it records.
+5. Combat last, together with the LLMs (fast decision model, slow strategy model).
+
+Exploration badges outside cities (3.1) wait until the bot can survive there.
+See `docs/HANDOFF.md` for the current state.

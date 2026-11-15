@@ -78,5 +78,15 @@ class WorldState:
             "SELECT COUNT(*) FROM failures WHERE skill = ? AND target = ? AND t >= ?",
             (skill, target, self.clock() - within_s)).fetchone()[0]
 
+    def clear_badges(self) -> None:
+        """Forget earned badges (e.g. ones counted before chat confirmation existed)."""
+        self.db.execute("DELETE FROM badges")
+        self.db.commit()
+
+    def clear_failures(self) -> None:
+        """Forget past failures (new code: give everything another go)."""
+        self.db.execute("DELETE FROM failures")
+        self.db.commit()
+
     def close(self) -> None:
         self.db.close()

@@ -125,6 +125,22 @@ class RunRecorder:
         except Exception:
             pass
 
+    def crop(self, frame, label, frac) -> bool:
+        """Save a full-resolution crop (x0, y0, x1, y1 as fractions) to shots/crops/."""
+        if not self.enabled or frame is None:
+            return False
+        try:
+            import cv2
+            h, w = frame.shape[:2]
+            x0, y0, x1, y1 = int(frac[0] * w), int(frac[1] * h), int(frac[2] * w), int(frac[3] * h)
+            d = self.dir / "shots" / "crops"
+            d.mkdir(parents=True, exist_ok=True)
+            name = f"{self._tick:05d}_{self.t():07.1f}s_{re.sub(r'[^a-z0-9_.-]+', '', str(label).lower())}.png"
+            cv2.imwrite(str(d / name), frame[y0:y1, x0:x1])
+            return True
+        except Exception:
+            return False
+
     def _shot(self, frame, label):
         import cv2
 
@@ -315,6 +331,16 @@ def analyse(ticks, events):
     rej = sum(1 for t in ticks if t.get("dist_raw") is not None and t.get("dist") is None)
     if rej:
         out.append(f"{rej} distance readings rejected as misreads.")
+    # Height: read every tick, not used for navigation yet. Summarise for review.
+    hs = [t["height"] for t in ticks if t.get("height") is not None]
+    miss = sum(1 for e in events if e.get("kind") == "height_missing")
+    jumps = [e for e in events if e.get("kind") == "height_jump"]
+    if hs or miss or jumps:
+        out.append(f"Height: {len(hs)} readings, range {min(hs) if hs else '-'}..{max(hs) if hs else '-'} m, "
+                   f"{miss} missing, {len(jumps)} jumps over the threshold"
+                   + (" (crops in shots/crops/)" if miss or jumps else ""))
+        for e in jumps[:8]:
+            out.append(f"      {e['t']:7.1f}s  {e.get('last')} -> {e.get('raw')} m at {e.get('pos')}")
     return out
 
 

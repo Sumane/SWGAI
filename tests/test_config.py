@@ -8,7 +8,7 @@ def test_defaults_match_original_navigator_constants():
     n = s.nav
     # Values copied from navigation_v0_12.py (header v0.20)
     assert (n["stop_dist"], n["verify_readings"], n["final_creep_dist"]) == (50, 5, 20)
-    assert (n["ocr_stale_limit"], n["clear_hz"], n["cell_size"]) == (15.0, 2.0, 5.0)
+    assert (n["ocr_stale_limit"], n["clear_hz"]) == (15.0, 2.0)
     assert (n["recal_attempt_secs"], n["explore_leg_m"], n["stop_debounce"]) == (3.0, 20.0, 3)
     assert s.planet == "naboo" and s.monitor_index == 2 and s.kill_key == "f8"
     assert s.keys["AUTORUN"] == "numlock" and s.keys["FORWARD"] == "up"

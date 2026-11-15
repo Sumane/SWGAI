@@ -7,7 +7,11 @@ from jedai.navigation.dstar_lite import DStarLite
 from jedai.navigation.grid_db import BLOCKED, CLEAR, NavDatabase
 from jedai.navigation.navigator import Navigator
 
-CFG = load_settings(local_file="none.yaml").nav
+# The marking-rule tests below were written for the 5 m, map-everything mode;
+# the 8 Nov mode (2 m cells, map only when stuck, two strikes) has its own tests.
+CFG = dict(load_settings(local_file="none.yaml").nav, cell_size=5.0,
+           map_only_when_stuck=False, two_strikes=False)
+NEW_CFG = load_settings(local_file="none.yaml").nav
 
 
 class FakeKeys:
@@ -248,7 +252,7 @@ def test_stuck_marks_only_dstar_next_cell(nav):
     nav.r.planner.initialise()
     nav.r.planner_active = True
     first = nav.r.planner.get_planned_path(max_steps=2)[1]
-    nav.heading = (0.0, 1.0)                    # facing doesn't matter when D* has a route
+    nav.heading = (1.0, 0.0)                    # facing the cell (8 Nov: only a faced cell is blamed)
     nav._enter_recal((2.5, 2.5))
     assert nav.r.db.get_state("naboo", *first) == BLOCKED
     blocked = [(x, z) for x in range(-5, 15, 5) for z in range(-5, 15, 5)
@@ -276,3 +280,44 @@ def test_stuck_starts_wall_following_angled_into_the_wall(nav, monkeypatch):
         p = (p[0] + esc["desired"][0] * 5, p[1] + esc["desired"][1] * 5)
         still = nav._follow_step(p, esc)
     assert still is False
+
+
+
+class FakeRunner2(FakeRunner):
+    def __init__(self, tmp_path):
+        super().__init__(tmp_path)
+        self.db = NavDatabase(str(tmp_path / "nav2.db"), resolution=2)
+        self.planner = DStarLite(self.db, self.planet, resolution=2)
+
+
+def _route_east(n):
+    n.r.planner.set_goal(60.0, 1.0)
+    n.r.planner.set_start(1.0, 1.0)
+    n.r.planner.initialise()
+    n.r.planner_active = True
+
+
+def test_new_mode_no_clear_marks_while_driving(tmp_path):
+    n = Navigator(FakeRunner2(tmp_path), NEW_CFG)
+    assert n.mark(5.0, 5.0, CLEAR) is False
+    from jedai.navigation.grid_db import UNEXPLORED
+    assert n.r.db.get_state("naboo", 5.0, 5.0) == UNEXPLORED
+
+
+def test_new_mode_two_strikes_and_only_the_faced_cell(tmp_path):
+    from jedai.navigation.grid_db import SUSPECT
+    n = Navigator(FakeRunner2(tmp_path), dict(NEW_CFG, blame_max_angle_deg=30))   # facing check is opt-in
+    _route_east(n)
+    nxt = n.r.planner.get_planned_path(max_steps=2)[1]
+    # facing north, D* wants east: not the cell it pushed into, nothing marked
+    n.heading = (0.0, 1.0)
+    n._mark_in_front((1.0, 1.0))
+    assert n.r.db.get_state("naboo", nxt[0], nxt[1]) != SUSPECT
+    # facing east: first bump = suspect, second = blocked
+    n.heading = (1.0, 0.0)
+    n._mark_in_front((1.0, 1.0))
+    assert n.r.db.get_state("naboo", nxt[0], nxt[1]) == SUSPECT
+    n.r.planner.update_start(1.0, 1.0)
+    path = n.r.planner.get_planned_path(max_steps=2)
+    n._mark_in_front((1.0, 1.0)) if path[1] == nxt else n.mark(nxt[0], nxt[1], BLOCKED)
+    assert n.r.db.get_state("naboo", nxt[0], nxt[1]) == BLOCKED

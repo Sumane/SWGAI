@@ -13,9 +13,10 @@
 paths:
   models_dir: models            # each model lives in <models_dir>/<name>/weights/best.pt
   data_dir: data                # datasets, screenshots, training runs (git-ignored)
-  nav_db: data/jedai_nav.db     # the navigation grid map (SQLite)
+  nav_db: data/jedai_nav_v2.db  # the navigation grid map (SQLite). v2 (8 Nov): fresh, 2 m cells
   command_file: data/nav_state.json   # navigator -> controller command channel
   debug_dir: data/debug_logs
+  harness_dir: data/harness     # harness world state + skill logs
   vehicles: config/vehicles.json      # vehicle speed calibration (speedometer writes here)
 
 screen:
@@ -65,6 +66,10 @@ navigation:
   # Arrival
   stop_dist: 50                 # metres: arrived (on a vehicle), after verify_readings in a row
   stop_dist_on_foot: 10         # metres: arrived when walking/running
+  remount_after_m: 40           # after a stuck-dismount, get back on once this far from the spot
+  remount_min_dist: 150         # ...unless the target is closer than this (walk the rest)
+  remount_progress_m: 30        # ...and only once it's this much closer to the target (past the obstacle)
+  remount_max_per_run: 3
   final_creep_dist_on_foot: 0   # on foot: no stop-start creeping at the end
   approach_dist_on_foot: 30     # on foot, closer than this: turn on the spot to the arrow, then step (0 = off)
   verify_readings: 5            # consecutive close readings = arrived
@@ -89,7 +94,11 @@ navigation:
   explore_hold_secs: 2.0
   explore_leg_m: 20.0           # cross-exploration leg length
   explore_leg_secs: 4.0
-  cell_size: 5.0                # must match the grid resolution below
+  cell_size: 2.0                # must match planner.resolution_m
+  map_only_when_stuck: true     # 8 Nov: navmesh is the map; record cells only where the bot gets stuck
+  two_strikes: true             # 1st bump in a cell = suspect (dear), 2nd = blocked
+  blame_max_angle_deg: 180      # only blame a cell faced within this angle. 180 = off: the heading comes
+                                # from movement, so it's stale after an unstick turn (sim got worse with 30)
   stop_speed_ratio: 0.10        # below this fraction of max speed = stopped
   stop_debounce: 3              # consecutive stopped ticks before recalibrating
   steer_deadband: 0.15          # sin(angle) below which the bot drives straight
@@ -131,6 +140,14 @@ navigation:
   mounted_mapping: clear_only   # clear_only (default) | none = nothing while mounted | all = old behaviour
   foot_vehicle: running         # profile to switch to after dismounting
   dismount_after_stuck: 2       # stuck this many times in the same place on a vehicle -> dismount
+  unseal_radius_m: 50           # D* finds no route at all: forget blocked cells this close and replan
+  trapped_after_stuck: 12       # stuck this many times within trapped_radius_m -> give the run up
+  trapped_radius_m: 8.0
+  area_radius_m: 120.0          # boxed in -> map a circle this big on its own D* layer
+  chat_watch_s: 6.0             # OCR the chat window this often for attacks / incapacitation / death (0 = off)
+  height_jump_m: 4.0            # height logged, not used yet: a change bigger than this per read is flagged
+  height_crop_every_s: 2.0      # ...with a crop of the coordinate readout, at most this often
+  height_crops_max: 150
   stuck_window_s: 300.0         # ...counting stuck points from the last 5 minutes
   stuck_radius_m: 40.0          # "same place" = within this distance of the last stuck point
                                 # (an unstick manoeuvre itself moves the bot 10-30 m)
@@ -148,10 +165,13 @@ planner:
   cost_near_blocked: 10.0       # unexplored cell next to a known blocked one (walls are long)
   # Variant switch. false = navmesh-free (default): the bot only knows what it
   # has seen. true = Core3 navmesh maps price unexplored cells (comparison runs).
-  navmesh_prior: false
+  navmesh_prior: true           # 8 Nov (Marc): navmesh on as the base map
   navmesh_prior_dir: data/navmesh_priors
   cost_prior_blocked: 30.0      # unexplored cell the navmesh says is not walkable
-  search_radius_m: 300.0
+  cost_suspect: 15.0            # a cell bumped into once
+  resolution_m: 2               # D* / map cell size (was 5: one bump walled off narrow stairs)
+  search_radius_m: 150.0        # D* goal ("carrot") at most this far ahead (2 m cells: keep it small)
+  bound_margin_m: 200.0         # D* searches the start-goal box plus this much round it (room to go round long walls)
   goal_reach_m: 8.0
 
 tools:
@@ -162,5 +182,38 @@ tools:
 harness:
   waypoint_command: "/waypoint {x:.0f} {z:.0f} {label}"   # confirm the exact syntax in-game
   waypoint_settle_s: 1.5
-  mount_key: ""            # toolbar key that calls the vehicle; empty = mount skill disabled
-  mount_settle_s: 3.0
+  mount_key: F1            # toolbar key that calls the vehicle; empty = mount skill disabled
+  mount_settle_s: 3.0         # in a city the vehicle is out at once
+  vehicle_call_delay_s: 16    # outside cities/camps the server takes 15 s (Core3 VehicleControlDevice); the bot
+                              # waits for the "calling vehicle in 15 seconds" chat line, or this long if chat is unreadable
+  mount_commands: ["/tar speederbike swoop", "/mount"]   # full name: "/tar spe" targeted a nearby speaker
+  mount_command_gap_s: 1.0
+  store_key: F1            # pressed after every dismount to store the vehicle (same key toggles it)
+  store_settle_s: 1.5
+  start_mounted: false     # first run only; after that the harness remembers
+  # Marc, 7 Nov: keep going until the badge is earned; failures are data.
+  max_badge_failures: 1000       # attempts per badge before System 2 skips it
+  max_consecutive_failures: null # null = never stop the session for failures
+  stop_on_exception: false       # a crashed skill is logged and the next attempt starts
+  # The client's chat log (/logChat, switched on at the start of each session).
+  # Read directly instead of OCR'ing the chat window. Newest match = current character.
+  chatlog_glob: "/run/media/marc/New Volume/Swgemu/profiles/*/Core3/*_chatlog.txt"
+  datapad_keys: [CTRL, d]                        # opens/closes the datapad (Marc's binding)
+  bot_waypoint_prefixes: [badge_, route_, bot_]  # clean_waypoints only deletes these
+  chatlog_watch: true          # keep /logChat ON: checked in the chat window at start and between steps
+  chatlog_check_min: 10        # re-check this often (types /logChat, reads ON/OFF, fixes it)
+  chatlog_trust_s: 120         # a new harness process trusts a check younger than this
+  clean_waypoints_every: 1                       # badge trips between datapad clean-ups; 0 = off
+  verify_badges: true      # only count a badge when a new "badge" line shows in chat
+  badge_message_wait_s: 2.5
+  force_mounted: null      # null = trust the remembered state; true/false = override it every start
+                           # one-off fix instead: write true/false into data/live/SET_MOUNTED
+  # harness_live: named full-resolution crops saved next to the tiles, as
+  # fractions (x0, y0, x1, y1) of the frame. Positions from Marc's 2560x1440 layout.
+  screen_regions:
+    chat: [0.21, 0.80, 0.73, 0.99]
+    minimap: [0.0, 0.69, 0.11, 0.99]
+    centre: [0.30, 0.25, 0.70, 0.80]
+    waypoints: [0.88, 0.25, 1.0, 0.36]
+  cuda_visible_devices: "0"   # harness_live: run vision on GPU 0 (the 3060, PCI order) so the
+                              # local LLM on the 5070 Ti keeps its VRAM. "" = don't restrict

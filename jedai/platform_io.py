@@ -92,18 +92,46 @@ class XTestInput:
 
         self._fake(X.KeyPress, key)
 
+    # mouse: window work (datapad, terminals). Coordinates are on this X
+    # display's root window, the same frame as the screen capture.
+    def move(self, x: int, y: int):
+        from Xlib import X
+        from Xlib.ext import xtest
+
+        xtest.fake_input(self.d, X.MotionNotify, x=int(x), y=int(y))
+        self.d.sync()
+
+    def click(self, x: int, y: int, button: str = "left", hold: float = 0.06):
+        from Xlib import X
+        from Xlib.ext import xtest
+
+        b = {"left": 1, "middle": 2, "right": 3}[button]
+        self.move(x, y)
+        time.sleep(0.08)                    # let the game register the hover
+        xtest.fake_input(self.d, X.ButtonPress, b)
+        self.d.sync()
+        time.sleep(hold)
+        xtest.fake_input(self.d, X.ButtonRelease, b)
+        self.d.sync()
+
     def keyUp(self, key: str):
         from Xlib import X
 
         self._fake(X.KeyRelease, key)
 
+    # characters typed with Shift on a UK/US keyboard -> the unshifted key
+    _SHIFTED = {"_": "-", "?": "/", ":": ";", "!": "1", "@": "2", "#": "3", "$": "4",
+                "%": "5", "^": "6", "&": "7", "*": "8", "(": "9", ")": "0", "+": "=",
+                "<": ",", ">": ".", "{": "[", "}": "]", '"': "'", "~": "`", "|": "\\"}
+
     def press(self, key: str):
-        shifted = len(key) == 1 and key.isupper()
+        shifted = len(key) == 1 and (key.isupper() or key in self._SHIFTED)
+        base = self._SHIFTED.get(key, key.lower()) if shifted else key
         if shifted:
             self.keyDown("shift")
-        self.keyDown(key.lower() if shifted else key)
+        self.keyDown(base)
         time.sleep(self.press_hold)        # games poll input; an instant tap can be missed
-        self.keyUp(key.lower() if shifted else key)
+        self.keyUp(base)
         if shifted:
             self.keyUp("shift")
 

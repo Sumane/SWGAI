@@ -67,7 +67,7 @@ def test_dismount_command_types_in_chat(tmp_path):
     mc = MasterController(CommandChannel(tmp_path / "c.json"), KEYS, "f8", inp, StopAfter(0))
     sent = []
     kc = KeyClient(CommandChannel(tmp_path / "c.json"))
-    kc.send = lambda payload, wait_for_idle=True: (sent.append(payload), mc.execute(payload))
+    kc.send = lambda payload, wait_for_idle=True, timeout=None: (sent.append(payload), mc.execute(payload))
     kc.dismount("command", "/dismount")
     assert [p["cmd"] for p in sent][-3:] == ["PRESS", "TYPE", "PRESS"]
     typed = "".join(k for e, k in inp.events if e == "press" and len(k) == 1)
@@ -78,6 +78,6 @@ def test_dismount_command_types_in_chat(tmp_path):
 def test_dismount_key_method(tmp_path):
     kc = KeyClient(CommandChannel(tmp_path / "c.json"))
     sent = []
-    kc.send = lambda payload, wait_for_idle=True: sent.append(payload)
+    kc.send = lambda payload, wait_for_idle=True, timeout=None: sent.append(payload)
     kc.dismount("key", key="9")
     assert sent[-1] == {"cmd": "PRESS", "key": "9"}

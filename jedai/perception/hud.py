@@ -78,11 +78,31 @@ class CoordinateReader:
         if not res_co or not res_co[0].boxes:
             return None, None, None
 
-        values = {}
+        # FIX (7 Nov): the same field box could come back under two labels, so
+        # z was read from the x digits ((-5028, -5028)); four of those in a row
+        # got accepted and the watchdog stopped a good run. Keep the most
+        # confident box per field, and drop a field whose box is another's.
+        best = {}
         names = self.m_coords.names
         for box in res_co[0].boxes:
             field = names[int(box.cls[0])]
-            bx1, by1, bx2, by2 = map(int, box.xyxy[0])
+            conf = float(box.conf[0]) if getattr(box, "conf", None) is not None else 0.0
+            if field not in best or conf > best[field][0]:
+                best[field] = (conf, tuple(map(int, box.xyxy[0])))
+
+        def iou(a, b):
+            ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
+            iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
+            inter = ix * iy
+            union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+            return inter / union if union > 0 else 0.0
+        fields = sorted(best, key=lambda f: -best[f][0])
+        for i, f in enumerate(fields):
+            if any(iou(best[f][1], best[g][1]) > 0.5 for g in fields[:i] if g in best):
+                del best[f]                      # same box as a more confident field
+
+        values = {}
+        for field, (_conf, (bx1, by1, bx2, by2)) in best.items():
             raw = read_digits(self.m_digit, safe_crop(mm_crop, bx1, by1, bx2, by2))
             if raw is not None:
                 try:

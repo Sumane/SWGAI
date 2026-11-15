@@ -8,7 +8,8 @@ import time
 class Supervisor:
     def __init__(self, registry, state, log, system2, *, planet: str, read_position=None,
                  stop_check=lambda: False, max_steps: int | None = None,
-                 max_minutes: float | None = None, max_consecutive_failures: int = 3,
+                 max_minutes: float | None = None, max_consecutive_failures: int | None = 3,
+                 stop_on_exception: bool = True, between_steps=None,
                  clock=time.time):
         self.registry, self.state, self.log, self.system2 = registry, state, log, system2
         self.planet = planet
@@ -16,8 +17,10 @@ class Supervisor:
         self.stop_check = stop_check
         self.max_steps = max_steps
         self.max_minutes = max_minutes
-        self.max_fail = max_consecutive_failures
+        self.max_fail = max_consecutive_failures      # None: never stop for failures
+        self.stop_on_exception = stop_on_exception
         self.clock = clock
+        self.between_steps = between_steps    # housekeeping before each decision (chat-log watcher)
         self.steps = 0
 
     def _limit(self, t0: float) -> str | None:
@@ -40,6 +43,11 @@ class Supervisor:
                 if stop:
                     reason = stop
                     break
+                if self.between_steps is not None:
+                    try:
+                        self.between_steps()
+                    except Exception as e:      # housekeeping never ends a run
+                        self.log.note("between_steps_error", error=f"{type(e).__name__}: {e}")
                 if self.read_position is not None:
                     pos = self.read_position()
                     if pos is not None:
@@ -56,7 +64,15 @@ class Supervisor:
                 print(f"[harness]   -> {result.status} {result.reason}")
                 self.steps += 1
                 fails = 0 if result.ok else fails + 1
-                if fails >= self.max_fail:
+                if result.reason == "dead":
+                    # needs a decision a script can't make yet (clone where?): stop
+                    reason = "dead"
+                    break
+                if result.reason == "exception" and self.stop_on_exception:
+                    # a bug, not a game problem: stop rather than move on to the next target
+                    reason = "skill_exception"
+                    break
+                if self.max_fail is not None and fails >= self.max_fail:
                     reason = "too_many_failures"
                     break
         except BaseException as e:

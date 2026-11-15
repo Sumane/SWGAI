@@ -44,7 +44,7 @@ def main():
         ticks, _ = load_run(run)
         pts = [t["pos"] for t in ticks if t.get("pos")]
         if pts:
-            db = NavDatabase(str(s.path("nav_db")))
+            db = NavDatabase(str(s.path("nav_db")), resolution=int(s.planner.get("resolution_m", 5)))
             xs, zs = [p[0] for p in pts], [p[1] for p in pts]
             cells = db.get_cells_in_region(s.planet, min(xs) - 100, max(xs) + 100, min(zs) - 100, max(zs) + 100)
             blocked = [(c["cx"] * 5, c["cz"] * 5) for c in cells if c["state"] == BLOCKED]

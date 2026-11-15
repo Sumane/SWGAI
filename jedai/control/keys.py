@@ -30,12 +30,13 @@ class KeyClient:
         self.ack_timeout = ack_timeout
         self.autorun_active = False
 
-    def send(self, payload: dict, wait_for_idle: bool = True):
+    def send(self, payload: dict, wait_for_idle: bool = True, timeout: float | None = None):
         if not self.channel.write(payload):
             return
-        if wait_for_idle and not self.channel.wait_for_idle(self.ack_timeout):
+        timeout = self.ack_timeout if timeout is None else timeout
+        if wait_for_idle and not self.channel.wait_for_idle(timeout):
             print(f"\n[keys] No acknowledgement for {payload.get('cmd')} "
-                  f"within {self.ack_timeout}s. Is the controller running?")
+                  f"within {timeout:.1f}s. Is the controller running?")
 
     def press(self, key: str, state=None):
         payload = {"cmd": "PRESS", "key": key}
@@ -63,7 +64,31 @@ class KeyClient:
         self.autorun_active = False
 
     def type_text(self, text: str):
-        self.send({"cmd": "TYPE", "text": text})
+        # typing takes ~50 ms a character: wait for all of it, or the next command
+        # (the Enter that sends it) overwrites the channel and is lost
+        self.send({"cmd": "TYPE", "text": text}, timeout=self.ack_timeout + 0.12 * len(text))
+
+    def click(self, x: int, y: int, button: str = "left"):
+        """Mouse click at screen pixel (x, y) of the game display."""
+        self.send({"cmd": "CLICK", "x": int(x), "y": int(y), "button": button})
+
+    def move_mouse(self, x: int, y: int):
+        self.send({"cmd": "MOVE", "x": int(x), "y": int(y)})
+
+    def combo(self, *keys: str, duration: float = 0.08):
+        """Hold keys together, e.g. combo("CTRL", "d") for the datapad."""
+        self.send({"cmd": "TAP_MULTI", "keys": list(keys), "duration": duration})
+
+    def chat(self, text: str, open_wait: float = 0.4, send_wait: float = 0.3):
+        """Send a chat line / slash command: Enter, type it, Enter.
+        The pauses let the chat box open before typing and finish before sending
+        (without them SWG received "/mount" as "mmount")."""
+        import time
+        self.press("ENTER")
+        time.sleep(open_wait)
+        self.type_text(text)
+        time.sleep(send_wait)
+        self.press("ENTER")
 
     def dismount(self, method: str = "command", command: str = "/dismount", key: str = ""):
         """Get off the vehicle: type a chat command, or press a (toolbar) key."""

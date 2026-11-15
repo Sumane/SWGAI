@@ -10,7 +10,20 @@ import math
 import numpy as np
 import pytest
 
-from jedai.config import load_settings
+from jedai.config import load_settings as _load_settings
+
+
+def legacy_mode(s):
+    """The navmesh-free variant these drives were written for: 5 m cells, map
+    everything, one bump = wall. The 8 Nov mode (navmesh map, 2 m cells,
+    stuck-only, two strikes) is tested at the bottom with a navmesh."""
+    s.raw["navigation"].update(cell_size=5.0, map_only_when_stuck=False, two_strikes=False)
+    s.raw["planner"].update(resolution_m=5, navmesh_prior=False, search_radius_m=300.0, bound_margin_m=150.0)
+    return s
+
+
+def load_settings(**kw):
+    return legacy_mode(_load_settings(**kw))
 from jedai.navigation import navigator as nav_mod, runner as runner_mod
 from jedai.navigation.runner import NavigationRunner
 from jedai.navigation.grid_db import BLOCKED
@@ -32,6 +45,7 @@ class Clock:
 
 class World:
     SPEED, TURN = 16.0, math.radians(120)    # m/s, rad/s
+    MOUNTED_SPEED = 16.0
 
     def __init__(self, clock, target, walls=(), right_is_clockwise=True, mounted_lag_s=0.0):
         self.clock, self.target, self.walls = clock, target, walls
@@ -129,6 +143,12 @@ class SimKeys:
         self.stop_movement()
         self.w.dismounts += 1
         self.w.SPEED = 10.5          # on foot
+
+    def chat(self, text):
+        # remount after a stuck-dismount (F1, /tar spe, /mount)
+        if text.strip() == "/mount":
+            self.w.mounts = getattr(self.w, "mounts", 0) + 1
+            self.w.SPEED = self.w.MOUNTED_SPEED
 
 
 class SimHud:
@@ -231,7 +251,8 @@ def test_mounted_bot_dismounts_at_a_wall_and_only_blocks_on_foot(tmp_path, monke
 
     r.navigate()
     assert world.dismounts == 1
-    assert r.current_vehicle == "running" and not r.mounted
+    # Marc, 7 Nov: once past the wall it gets back on instead of walking the rest
+    assert getattr(world, "mounts", 0) == 1 and r.mounted and r.current_vehicle == "swoop"
     assert mapped_while_mounted == []
     assert world.dist() <= s.nav["stop_dist"]
 
@@ -350,6 +371,44 @@ def test_run_is_recorded(tmp_path, monkeypatch):
     assert '"stuck"' in kinds and ('"unstick"' in kinds or '"follow"' in kinds) and '"end"' in kinds
 
 
+def test_height_misreads_are_logged_with_crops(tmp_path, monkeypatch):
+    """Marc, 7 Nov: log height reads (and crops of odd ones) for review; don't feed D*."""
+    monkeypatch.delenv("JEDAI_NO_RECORD", raising=False)
+    clock = Clock()
+    for mod in (nav_mod, runner_mod):
+        monkeypatch.setattr(mod.time, "time", clock.time)
+        monkeypatch.setattr(mod.time, "sleep", clock.sleep)
+    answers = iter(["", "0"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    world = World(clock, target=(300.0, 0.0), right_is_clockwise=True)
+    s = load_settings(local_file="none.yaml")
+    s.raw["paths"]["nav_db"] = str(tmp_path / "nav.db")
+    s.raw["paths"]["debug_dir"] = str(tmp_path / "runs")
+    hud = SimHud(world)
+    n = {"i": 0}
+    real = hud.read_coords
+
+    def coords(frame):
+        x, _, z = real(frame)
+        n["i"] += 1
+        return x, (None if n["i"] % 11 == 0 else 99.0 if n["i"] % 7 == 0 else 10.0), z
+    hud.read_coords = coords
+    screen = SimScreen(world, clock)
+    grab = screen.grab
+    screen.grab = lambda: np.pad(grab(), ((0, 98), (0, 98), (0, 0)))     # a frame big enough to crop
+    r = NavigationRunner(s, hud=hud, keys=SimKeys(world, clock), screen=screen)
+    r.vel_tracker._clock = clock.time
+    r.should_stop = lambda: clock.t > 1000 + 600
+    r.navigate()
+    (run,) = list((tmp_path / "runs").iterdir())
+    ev = (run / "events.jsonl").read_text()
+    assert '"height_jump"' in ev and '"height_missing"' in ev
+    assert list((run / "shots" / "crops").glob("*height*.png"))
+    summary = (run / "summary.txt").read_text()
+    assert "Height:" in summary and "missing" in summary
+    assert world.dist() <= s.nav["stop_dist"]            # navigation unaffected
+
+
 @pytest.mark.parametrize("walls", [
     ((140, -150, 150, 150),),                                           # 300 m wall
     pytest.param(((140, -100, 150, 100), (40, 100, 150, 110), (40, -110, 150, -100)),
@@ -397,3 +456,121 @@ def test_on_foot_arrives_within_10m(tmp_path, monkeypatch):
     r.should_stop = lambda: clock.t > 1000 + 600
     r.navigate()
     assert world.dist() <= s.nav["stop_dist_on_foot"], f"ended {world.dist()}m away"
+
+
+def test_gives_up_when_trapped(tmp_path, monkeypatch):
+    """7 Nov: wedged in a corner it tried 77 times in 15 min. Boxed in, it must give up."""
+    clock = Clock()
+    for mod in (nav_mod, runner_mod):
+        monkeypatch.setattr(mod.time, "time", clock.time)
+        monkeypatch.setattr(mod.time, "sleep", clock.sleep)
+    answers = iter(["", "0"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    box = ((-20, -20, 20, -4), (-20, 4, 20, 20), (-20, -20, -4, 20), (4, -20, 20, 20))   # 8 m pen, thick walls
+    world = World(clock, target=(300.0, 0.0), walls=box, right_is_clockwise=True)
+    world.SPEED = 10.5
+    s = load_settings(local_file="none.yaml")
+    s.raw["paths"]["nav_db"] = str(tmp_path / "nav.db")
+    s.raw["navigation"]["right_turn_sign"] = -1
+    s.raw["navigation"]["default_vehicle"] = "running"
+    s.raw["harness"]["mount_key"] = ""
+    r = NavigationRunner(s, hud=SimHud(world), keys=SimKeys(world, clock), screen=SimScreen(world, clock))
+    r.vel_tracker._clock = clock.time
+    r.apply_vehicle("running")
+    r.should_stop = lambda: clock.t > 1000 + 3600
+    t0 = clock.t
+    r.navigate(target_name="Theed Starport")
+    assert r._end_reason == "trapped"
+    assert clock.t - t0 < 2400, f"took {clock.t - t0:.0f}s to give up"
+    # Marc, 7 Nov: boxed in -> flagged for review and mapped on its own layer first
+    areas = r.db.areas()
+    assert len(areas) == 1 and areas[0]["status"] == "pending_review"
+    assert "trapped on its own layer too" in areas[0]["notes"]
+    layer = r.db.get_cells_in_region(f"naboo@area{areas[0]['id']}", -60, 60, -60, 60)
+    assert layer, "nothing mapped on the area layer"
+
+
+def test_duplicate_coordinate_read_is_ignored(tmp_path):
+    """7 Nov: z read from the x digits ((-5028, -5028)) got accepted and stopped a good run."""
+    clock = Clock()
+    world = World(clock, target=(300.0, 0.0))
+    s = load_settings(local_file="none.yaml")
+    s.raw["paths"]["nav_db"] = str(tmp_path / "nav.db")
+    hud = SimHud(world)
+    r = NavigationRunner(s, hud=hud, keys=SimKeys(world, clock), screen=SimScreen(world, clock))
+    seq = iter([(-5028.0, 5.0, 3053.0)] + [(-5028.0, 5.0, -5028.0)] * 6)
+    hud.read_coords = lambda frame: next(seq)
+    for _ in range(7):
+        r.update_coords(None)
+    assert r.player[::2] == (-5028.0, 3053.0)
+
+
+def test_stops_when_killed(tmp_path, monkeypatch):
+    """7 Nov: killed by nightspiders while it kept steering. The chat says so: stop."""
+    clock = Clock()
+    for mod in (nav_mod, runner_mod):
+        monkeypatch.setattr(mod.time, "time", clock.time)
+        monkeypatch.setattr(mod.time, "sleep", clock.sleep)
+    answers = iter(["", "0"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    world = World(clock, target=(2000.0, 0.0), right_is_clockwise=True)
+    s = load_settings(local_file="none.yaml")
+    s.raw["paths"]["nav_db"] = str(tmp_path / "nav.db")
+    r = NavigationRunner(s, hud=SimHud(world), keys=SimKeys(world, clock), screen=SimScreen(world, clock))
+    r.vel_tracker._clock = clock.time
+    r.should_stop = lambda: clock.t > 1000 + 900
+    t0 = clock.t
+    base = ["you have entered theed"]
+    r.chat_lines = lambda frame=None: base + (["you were slain by a nightspider aggressor. requesting clone activation..."]
+                                              if clock.t - t0 > 60 else [])
+    assert r.navigate(target_name="Theed Starport") == "dead"
+    assert clock.t - t0 < 90
+
+
+
+# ---------------------------------------------------------------------------
+# 8 Nov mode: the navmesh is the map, 2 m cells, map only when stuck, two strikes
+# ---------------------------------------------------------------------------
+
+def _new_mode_run(tmp_path, monkeypatch, world, navmesh_walls, minutes=15, screen_cls=None):
+    clock = world.clock
+    for mod in (nav_mod, runner_mod):
+        monkeypatch.setattr(mod.time, "time", clock.time)
+        monkeypatch.setattr(mod.time, "sleep", clock.sleep)
+    answers = iter(["", "0"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    s = _load_settings(local_file="none.yaml")             # the real (new) settings
+    s.raw["paths"]["nav_db"] = str(tmp_path / "nav.db")
+    s.raw["navigation"]["right_turn_sign"] = -1
+
+    def navmesh(wx, wz):                                    # what the navmesh says is walkable
+        return 0.0 if any(x0 <= wx <= x1 and z0 <= wz <= z1 for x0, z0, x1, z1 in navmesh_walls) else 1.0
+    monkeypatch.setattr(runner_mod.NavigationRunner, "_navmesh_prior", lambda self, p: navmesh)
+    r = NavigationRunner(s, hud=SimHud(world), keys=SimKeys(world, clock),
+                         screen=(screen_cls or SimScreen)(world, clock))
+    r.vel_tracker._clock = clock.time
+    r.should_stop = lambda: clock.t > 1000 + 60 * minutes
+    r.navigate()
+    return s
+
+
+def test_new_mode_navmesh_wall_driven_round_without_bumping(tmp_path, monkeypatch):
+    walls = ((140, -150, 150, 150),)
+    world = World(Clock(), target=(400.0, 0.0), walls=walls, right_is_clockwise=True)
+    s = _new_mode_run(tmp_path, monkeypatch, world, navmesh_walls=walls)
+    assert world.dist() <= s.nav["stop_dist"], f"ended {world.dist()}m away"
+
+
+@pytest.mark.parametrize("seed", range(3))
+def test_new_mode_city_with_navmesh(tmp_path, monkeypatch, seed):
+    walls = _city(seed)
+    world = World(Clock(), target=(800.0, 0.0), walls=walls, right_is_clockwise=True, mounted_lag_s=0.5)
+    s = _new_mode_run(tmp_path, monkeypatch, world, navmesh_walls=walls, screen_cls=SlowScreen)
+    assert world.dist() <= s.nav["stop_dist"], f"ended {world.dist()}m away"
+
+
+def test_new_mode_wall_missing_from_navmesh(tmp_path, monkeypatch):
+    """The navmesh is wrong here (a wall it doesn't know): bumps must teach the map."""
+    world = World(Clock(), target=(400.0, 0.0), walls=((140, -60, 150, 60),), right_is_clockwise=True)
+    s = _new_mode_run(tmp_path, monkeypatch, world, navmesh_walls=())
+    assert world.dist() <= s.nav["stop_dist"], f"ended {world.dist()}m away"

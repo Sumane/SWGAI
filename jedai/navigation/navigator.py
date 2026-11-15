@@ -43,7 +43,7 @@ import math
 import time
 from collections import deque
 
-from .grid_db import BLOCKED, CLEAR
+from .grid_db import BLOCKED, CLEAR, SUSPECT
 from .target_estimator import ARROW_DEG, TargetEstimator
 
 
@@ -126,6 +126,10 @@ class Navigator:
         planner is told and replans on its next update (FIX: D* cache miss).
         Returns True if the cell was recorded.
         """
+        if state == CLEAR and self.cfg.get("map_only_when_stuck", False):
+            # 8 Nov (Marc): the navmesh is the map; it changes only where the
+            # bot actually gets stuck. No clear marks while driving.
+            return False
         if state == CLEAR and self._near_cell_edge(wx, wz) and \
                 self.r.db.get_state(self.r.planet, wx, wz) == BLOCKED:
             # FIX (simulator, then explains the in-game flip-flopping): a bot
@@ -134,8 +138,8 @@ class Navigator:
             # that CLEAR because "it's standing there" erased the wall every time.
             # A blocked cell is only cleared from its middle.
             return False
-        if state == BLOCKED and not (self.mounted and self.cfg.get("mounted_mapping", "clear_only") != "all"):
-            self._ev("blocked", cell=(wx, wz))
+        if state in (BLOCKED, SUSPECT) and not (self.mounted and self.cfg.get("mounted_mapping", "clear_only") != "all"):
+            self._ev("blocked" if state == BLOCKED else "suspect", cell=(wx, wz))
         if self.mounted:
             # mounted_mapping: "clear_only" (default) = keep CLEAR, drop BLOCKED;
             # "none" = nothing while mounted; "all" = old behaviour
@@ -147,6 +151,8 @@ class Navigator:
             return True
         if state == CLEAR:
             self.r.db.mark_clear(self.r.planet, wx, wz)
+        elif state == SUSPECT:
+            self.r.db._set_state(self.r.planet, wx, wz, SUSPECT)
         else:
             self.r.db.mark_blocked(self.r.planet, wx, wz)
         if self.r.planner_active:
@@ -206,6 +212,7 @@ class Navigator:
         return tx, tz
 
     _goal_xy = None
+    known_target = None     # (x, z) when the caller knows where the target is
 
     _carrot = None
 
@@ -270,6 +277,13 @@ class Navigator:
         Returns True if the D* goal was (re)set.
         """
         if pos is None or dist is None:
+            return False
+        if self.known_target is not None:
+            # real coordinates given (wiki knowledge): no estimating needed
+            if not self.r.planner_active or self._goal_xy != self.known_target:
+                self._set_target(self.known_target[0], self.known_target[1], dist, pos)
+                print(f"\n[EST] Known target ({self.known_target[0]:.0f},{self.known_target[1]:.0f})")
+                return True
             return False
         use_arrow = arrow if (self.heading is not None and self.heading_stable()) else None
         if not self.estimator.add(pos, dist, use_arrow, self.heading):
@@ -340,6 +354,27 @@ class Navigator:
             self._last_mark_time = now
         if self.r.planner_active:
             self.r.planner.update_start(pos[0], pos[1])
+
+    _unseal_t = 0.0
+
+    def _unseal(self, pos):
+        """
+        D* has no route at all: the map has us walled in. We're standing here,
+        so we got in: some of those walls are wrong (Marc, 7 Nov: "just remove
+        all updates in a 50 m radius"). Forget the blocked cells round us and
+        replan; real walls get marked again as we bump into them.
+        """
+        if self.r.planner.has_path() or time.time() - self._unseal_t < 3.0:
+            return
+        self._unseal_t = time.time()
+        radius = float(self.cfg.get("unseal_radius_m", 50.0))
+        n = self.r.db.clear_blocked_near(self.r.planet, pos[0], pos[1], radius)
+        if n == 0:
+            radius *= 2                                    # walled in from further out
+            n = self.r.db.clear_blocked_near(self.r.planet, pos[0], pos[1], radius)
+        print(f"\n[D*] no route out: forgot {n} blocked cells within {radius:.0f} m, replanning")
+        self._ev("unseal", pos=pos, cells=n, radius=radius)
+        self.r._switch_layer(self.r.planet, pos)           # fresh planner, no stale cache
 
     # ------------------------------------------------------------------
     # Steering
@@ -767,6 +802,7 @@ class Navigator:
 
         if self.r.planner_active and pos is not None:
             self.r.planner.update_start(pos[0], pos[1])
+            self._unseal(pos)
 
         self.observe_target(pos, dist, arrow)
         self._advance_carrot(pos)
@@ -913,6 +949,8 @@ class Navigator:
         nx, nz = -lz / ln, lx / ln                      # perpendicular to the slide
         if nx * (wp[0] - x1) + nz * (wp[1] - z1) < 0:   # towards where it wanted to go
             nx, nz = -nx, -nz
+        if self.cfg.get("map_only_when_stuck", False):
+            return                                  # only stuck marks (8 Nov)
         seen = set()
         for x, z in track:
             c = self._cell_of(x + nx * 1.0, z + nz * 1.0)
@@ -953,6 +991,16 @@ class Navigator:
             self._pushes = [(p, h) for p, h in near if h is not None]
 
             stuck_count = self._recal_cycles + 1
+            # FIX (harness run, 7 Nov): wedged in a corner on foot it went
+            # through stuck/back/pivot 77 times in 15 min within 3 m of one spot.
+            # That many in a tiny radius (not sliding along a long wall) means
+            # trapped: give the run up and let the caller decide.
+            tight = sum(1 for _, p, _h in self._stuck_hist
+                        if math.hypot(p[0] - pos[0], p[1] - pos[1]) <= self.cfg.get("trapped_radius_m", 8.0))
+            if tight >= self.cfg.get("trapped_after_stuck", 12):
+                print(f"\n[NAV] Stuck {stuck_count}x within {self.cfg['stuck_radius_m']:.0f}m: trapped, giving up this run")
+                self._ev("trapped", pos=pos, times=stuck_count)
+                return "TRAPPED"
             if self.mounted and stuck_count >= self.cfg["dismount_after_stuck"]:
                 print(f"\n[NAV] Stuck {stuck_count}x within {self.cfg['stuck_radius_m']:.0f}m "
                       f"on a vehicle — dismounting")
@@ -1133,23 +1181,42 @@ class Navigator:
         """
         here = self._cell_of(*pos)
         target = None
+        f = self.heading
         if self.r.planner_active and self.r.planner.has_path():
             path = self.r.planner.get_planned_path(max_steps=2)
             if len(path) > 1:
                 target = path[1]
                 how = "D*'s next cell"
+                # 8 Nov: a third of the cells marked in Theed weren't in front
+                # of the bot (some behind it): it got "stuck" again mid-turn
+                # and the cell it was turning towards took the blame. Only
+                # blame a cell the bot was facing.
+                if f is not None and float(self.cfg.get("blame_max_angle_deg", 180.0)) < 180.0:
+                    vx, vz = target[0] - pos[0], target[1] - pos[1]
+                    vn = math.hypot(vx, vz)
+                    if vn > 0.01:
+                        cosang = (vx * f[0] + vz * f[1]) / (vn * math.hypot(f[0], f[1]) + 1e-9)
+                        if cosang < math.cos(math.radians(float(self.cfg.get("blame_max_angle_deg", 30.0)))):
+                            ang = math.degrees(math.acos(max(-1.0, min(1.0, cosang))))
+                            print(f"\n[MAP] Stuck, but not facing D*'s next cell ({ang:.0f}° off): nothing marked")
+                            self._ev("mark_skipped", cell=target, angle=round(ang))
+                            return
         if target is None:
-            f = self._facing(pos)
             if f is None:
-                print("\n[MAP] Stuck but no route and no facing: nothing marked")
+                print("\n[MAP] Stuck but no route and no heading: nothing marked")
                 return
             for k in (1.0, 2.0, 3.0, 4.0, 5.0):
                 bx, bz = pos[0] + f[0] * k, pos[1] + f[1] * k
                 if self._cell_of(bx, bz) != here:
                     break
             target, how = (bx, bz), "cell ahead"
-        if self.mark(target[0], target[1], BLOCKED, replan_now=True):
-            print(f"\n[MAP] Couldn't get into {how} ({target[0]:.0f},{target[1]:.0f}): blocked, D* rerouting")
+        # two strikes: the first bump makes the cell dear (SUSPECT), the
+        # second (a later attempt, after the unstick) makes it a wall
+        prev = self.r.db.get_state(self.r.planet, target[0], target[1])
+        state = BLOCKED if (prev == SUSPECT or not self.cfg.get("two_strikes", True)) else SUSPECT
+        if self.mark(target[0], target[1], state, replan_now=True):
+            word = "blocked" if state == BLOCKED else "suspect (1st bump)"
+            print(f"\n[MAP] Couldn't get into {how} ({target[0]:.0f},{target[1]:.0f}): {word}, D* rerouting")
         elif self.mounted:
             print("\n[MAP] Mounted: blocked cell not recorded (dismount rule)")
 
