@@ -252,7 +252,7 @@ def test_mount_dismount():
 
 def test_registry():
     reg = default_registry(FakeRunner(), WorldState(":memory:"), FakeSettings())
-    assert reg.names() == ["clean_waypoints", "dismount", "mount", "navigate_to", "recover_from_death", "travel_to"]
+    assert reg.names() == ["clean_waypoints", "dismount", "find_nearest", "follow_waypoint", "mount", "navigate_to", "recover_from_death", "take_mission", "travel_to"]
     with pytest.raises(ValueError):
         reg.register(Mount(None, None))
     with pytest.raises(KeyError):
@@ -1071,3 +1071,352 @@ def test_travel_from_inside_keren_starport_uses_the_recorded_walks(tmp_path, mon
     # the chain doesn't send the outdoor navigator into the building
     chain, calls, _ = _chain_rig(tmp_path, pos=(1373, 2748))
     assert chain.travel("Theed Spaceport").ok and [c[0] for c in calls] == ["travel_to", "clean_waypoints"]
+
+
+# --- take_mission (layout measured from the 16 Nov recording, frames 494 and 498) ---------
+
+def _browser_boxes(rows, loading=False, tx=370, ty=707):
+    b = [("mission browser", (tx, ty, tx + 119, ty + 8)), ("destroy", (tx + 16, ty + 31, tx + 54, ty + 40)),
+         ("deliver", (tx + 70, ty + 31, tx + 110, ty + 40)),
+         ("creator", (tx + 160, ty + 56, tx + 200, ty + 64)), ("title", (tx + 507, ty + 56, tx + 529, ty + 64)),
+         ("payment", (tx + 700, ty + 56, tx + 745, ty + 64)), ("start", (tx + 910, ty + 56, tx + 940, ty + 64)),
+         ("refresh", (tx + 120, ty + 508, tx + 160, ty + 518)), ("accept mission", (tx + 375, ty + 508, tx + 455, ty + 518)),
+         ("mission details", (tx + 645, ty + 508, tx + 730, ty + 518)), ("exit", (tx + 960, ty + 508, tx + 978, ty + 518)),
+         ("you successfully make a payment of 100 credits", (570, 1272, 990, 1282))]
+    for i, (creator, title, pay, start) in enumerate(rows):
+        y = ty + 81 + 20 * i
+        b += [(creator, (tx + 9, y, tx + 9 + 8 * len(creator), y + 9)), (title, (tx + 352, y, tx + 352 + 8 * len(title), y + 9)),
+              (str(pay), (tx + 747 - 9 * len(str(pay)), y, tx + 747, y + 9)), (start, (tx + 752, y, tx + 835, y + 9))]
+    if loading:
+        b.append(("downloading available missions...", (1175, 700, 1395, 712)))
+    return b
+
+
+MISSIONS = [("toopa thovva", "important policy speech", 116, "196m to the sw"),
+            ("lee-be czekto", "important policy speech", 1096, "206m to the w"),
+            ("ege skira", "solo kloo-horn recording!", 1351, "116m to the sw")]
+
+
+def _detail_boxes(x=160, y=399):
+    f = [("item:", "datadisk"), ("start:", "264m to the w"), ("destination:", "6835m to the e"),
+         ("creator:", "eva taugae"), ("reward:", "776 credits"), ("difficulty:", "5")]
+    b = [("colo claw in honeyed spice-milk", (148, 240, 384, 250))]
+    for i, (lab, val) in enumerate(f):
+        ly = y - 112 + 56 * i
+        b += [(lab, (x, ly, x + 9 * len(lab), ly + 10)), (val, (x + 375 - 8 * len(val), ly + 27, x + 375, ly + 37))]
+    b += [("close", (x + 146, y + 487, x + 172, y + 497)), ("accept", (x + 1020, y + 487, x + 1055, y + 497))]
+    return b
+
+
+def test_mission_browser_rows_are_read_with_payment_and_distance():
+    from jedai.harness.skills import mission as m
+    boxes = _browser_boxes(MISSIONS)
+    win = m.browser_window(boxes)
+    assert set(win["read"]) == {"destroy", "deliver", "refresh", "accept", "details", "exit"}
+    rows = m.mission_rows(boxes, win)
+    assert [(r["creator"], r["payment"], r["start_m"], r["start_dir"]) for r in rows] == [
+        ("toopa thovva", 116, 196, "sw"), ("lee-be czekto", 1096, 206, "w"), ("ege skira", 1351, 116, "sw")]
+    assert m.choose(rows, "short")["payment"] == 116 and m.choose(rows, "rich")["payment"] == 1351
+    assert m.choose(rows, "rich", max_payment=1200)["payment"] == 1096
+    assert m.choose(rows, "short", min_payment=5000) is None
+    assert m.browser_window([("you have entered theed", (570, 1257, 700, 1266))]) is None
+
+
+def test_mission_browser_works_from_layout_when_labels_are_not_read():
+    from jedai.harness.skills import mission as m
+    boxes = [tb for tb in _browser_boxes(MISSIONS) if tb[0] in ("mission browser",) or tb[1][1] in (788, 808, 828)]
+    # payment and distance merged into one box on the first row
+    boxes = [tb for tb in boxes if tb[0] not in ("116", "196m to the sw")] + [("116 196m to the sw", (1090, 788, 1205, 797))]
+    win = m.browser_window(boxes)
+    assert win["read"] == [] and win["buttons"]["accept"] == (784, 1220) and win["tabs"]["deliver"] == (460, 740)
+    rows = m.mission_rows(boxes, win)
+    assert [r["payment"] for r in rows] == [116, 1096, 1351] and rows[0]["start_m"] == 196
+
+
+def test_mission_details_fields():
+    from jedai.harness.skills import mission as m
+    d = m.detail_window(_detail_boxes() + _browser_boxes(MISSIONS))
+    assert d["fields"]["item"] == "datadisk" and d["fields"]["creator"] == "eva taugae"
+    assert (d["start_m"], d["start_dir"], d["destination_m"], d["destination_dir"], d["reward"]) == (264, "w", 6835, "e", 776)
+    assert d["accept"] == (1197, 891) and d["close"] == (319, 891)
+    assert m.detail_window(_browser_boxes(MISSIONS)) is None
+    assert m.parse_distance("6835m to the E") == (6835, "e") and m.parse_distance("important") is None
+
+
+def _mission_rig(tmp_path, monkeypatch, screens):
+    import numpy as np
+    from jedai.harness.skills import mission as mmod
+    monkeypatch.setattr(mmod, "ROOT", tmp_path)
+    it = iter(screens)
+    last = {"b": []}
+
+    def fake_ocr(ocr, frame):
+        if frame.shape[0] != 1440:                # the 2x re-read of a window: same screen, 2x coordinates
+            return []
+        last["b"] = next(it, last["b"])
+        return last["b"]
+    monkeypatch.setattr(mmod, "ocr_boxes", fake_ocr)
+
+    class Keys(FakeKeys):
+        def __init__(self):
+            super().__init__()
+            self.clicks = []
+        def click(self, x, y, button="left"): self.clicks.append((x, y))
+        def release_all(self): pass
+        def tap(self, k, d=0.0): self.pressed.append(k)
+
+    class Runner:
+        keys = Keys()
+        class hud:
+            class waypoint_reader:
+                ocr = object()
+        class screen:
+            @staticmethod
+            def grab(): return np.zeros((1440, 2560, 3), np.uint8)
+    return mmod.TakeMission(Runner, FakeSettings(), sleep=lambda s: None), Runner
+
+
+TERMINAL = [("mission terminal", (1085, 440, 1185, 452))]
+
+
+def test_take_mission_dry_run_reads_and_takes_nothing(tmp_path, monkeypatch):
+    skill, runner = _mission_rig(tmp_path, monkeypatch, [
+        TERMINAL, _browser_boxes([], loading=True), _browser_boxes(MISSIONS), _detail_boxes() + _browser_boxes(MISSIONS)])
+    s = WorldState(":memory:")
+    res = skill.run(s, dry_run=True)
+    assert res.ok and res.reason == "dry_run"
+    assert len(res.data["missions"]) == 3 and res.data["would_take"]["payment"] == 116
+    assert res.data["would_take"]["destination_m"] == 6835
+    c = runner.keys.clicks
+    assert runner.keys.typed[:2] == ["/tar mission", "/ui action defaultAction"]
+    assert (1197, 891) not in c and (784, 1220) not in c     # neither Accept button
+    assert runner.keys.pressed[-2:] == ["ESC", "ESC"] and s.get("missions", []) == []
+
+
+def test_take_mission_accepts_and_checks_the_list(tmp_path, monkeypatch):
+    skill, runner = _mission_rig(tmp_path, monkeypatch, [
+        _browser_boxes(MISSIONS), _browser_boxes(MISSIONS), _detail_boxes() + _browser_boxes(MISSIONS),
+        _browser_boxes(MISSIONS[1:]), []])
+    s = WorldState(":memory:")
+    s.set_position("naboo", -4865, 4182)
+    res = skill.run(s)
+    assert res.ok and res.data["mission"]["verified"] is True
+    assert (1197, 891) in runner.keys.clicks and runner.keys.clicks[-1] == (1339, 1220)      # Accept, then Exit
+    assert s.get("missions")[0]["title"] == "important policy speech" and s.get("missions")[0]["taken_at"]["x"] == -4865
+    assert not (tmp_path / "data" / "live" / "anomalies").exists()
+
+
+def test_take_mission_falls_back_to_a_double_click(tmp_path, monkeypatch):
+    skill, runner = _mission_rig(tmp_path, monkeypatch, [TERMINAL] * 7 + [_browser_boxes(MISSIONS), _browser_boxes(MISSIONS),
+                                                         _detail_boxes() + _browser_boxes(MISSIONS)])
+    res = skill.run(WorldState(":memory:"), dry_run=True)
+    assert res.ok and runner.keys.typed.count("/tar mission") == 2
+    assert runner.keys.clicks[0] == runner.keys.clicks[1] == (1135, 562)      # under the name label
+
+
+def test_take_mission_without_a_terminal_in_view_is_an_anomaly(tmp_path, monkeypatch):
+    skill, runner = _mission_rig(tmp_path, monkeypatch, [[]])
+    res = skill.run(WorldState(":memory:"))
+    assert not res.ok and res.reason == "no_mission_browser"
+    assert (tmp_path / "data" / "live" / "anomalies" / "index.jsonl").exists()
+    assert runner.keys.pressed[-2:] == ["ESC", "ESC"]
+
+
+def _find_rig(tmp_path, monkeypatch, start, thing, facing=20, seen_within=64, walls=()):
+    import numpy as np
+    from jedai.harness.skills import find as fmod
+    monkeypatch.setattr(fmod, "ROOT", tmp_path)
+    world = WalkWorld(start, facing, walls=walls, turn_rate=42.0)
+    world.typed = []
+    world.chat = lambda t: world.typed.append(t)
+    world.combo = lambda *k, **kw: world.typed.append("+".join(k))
+    from jedai.harness.skills import datapad as dmod
+    monkeypatch.setattr(dmod, "ocr_boxes", lambda ocr, frame: [])
+    monkeypatch.setattr(dmod.CleanWaypoints, "_close", lambda self, h: None)
+
+    class Runner:
+        keys = world
+        mounted = False
+        class hud:
+            class waypoint_reader:
+                ocr = object()
+            @staticmethod
+            def read_coords(frame): return (world.read()[0], 1, world.read()[1])
+        class screen:
+            @staticmethod
+            def grab(): return np.zeros((1440, 2560, 3), np.uint8)
+        @staticmethod
+        def read_position(): return world.read()
+        @staticmethod
+        def should_stop(): return False
+    t = {"t": 0.0}
+    skill = fmod.FindNearest(Runner, FakeSettings(), sleep=lambda s: t.__setitem__("t", t["t"] + s),
+                             clock=lambda: t["t"] + 0.5 * len(world.taps), learned_path=tmp_path / "learned.json")
+
+    def target(label="target"):
+        d = math.hypot(thing[0] - world.x, thing[1] - world.z)
+        return ("mission terminal", round(d)) if d <= seen_within else None
+    skill._target = target
+    return skill, world
+
+
+def test_find_nearest_works_out_where_the_thing_is_and_walks_up(tmp_path, monkeypatch):
+    from jedai.navigation import places
+    skill, world = _find_rig(tmp_path, monkeypatch, start=(5277, 6682), thing=(5240, 6712))
+    s = WorldState(":memory:")
+    res = skill.run(s, what="mission")
+    assert res.ok, res
+    assert math.hypot(world.x - 5240, world.z - 6712) <= 5 and res.data["dist"] <= 5
+    assert world.typed[0] == "/find terminal_mission" and "/tar mission" in world.typed
+    place, d = places.nearest("naboo", "mission", (5277, 6682), tmp_path / "learned.json")
+    assert place["source"] == "found" and d < 60                       # remembered for next time
+    assert s.position()[0] == "naboo"
+
+
+def test_find_nearest_dry_run_only_reports(tmp_path, monkeypatch):
+    skill, world = _find_rig(tmp_path, monkeypatch, start=(5277, 6682), thing=(5240, 6712))
+    res = skill.run(WorldState(":memory:"), what="mission", dry_run=True)
+    assert res.ok and res.reason == "seen" and res.data["dist"] == 48 and world.taps == []
+    assert res.data["nearest_known"]["name"] == "mission terminal, theed"
+
+
+def test_find_nearest_none_in_range_gives_the_nearest_known(tmp_path, monkeypatch):
+    skill, world = _find_rig(tmp_path, monkeypatch, start=(-4991, 4072), thing=(0, 0))
+    res = skill.run(WorldState(":memory:"), what="mission")
+    assert not res.ok and res.reason == "none_in_range"
+    assert res.data["nearest_known"]["dist"] == round(math.hypot(-4865 + 4991, 4182 - 4072))
+    assert [t[0] for t in world.taps] == ["RIGHT"] * 6 and world.typed.count("/tar mission") == 6     # looked all round
+    assert world.typed[0] == "/find terminal_mission"                                                 # /find first
+    assert abs(sum(t[1] for t in world.taps) * 42 - 360) < 3
+
+
+def test_find_nearest_turns_to_see_a_terminal_behind(tmp_path, monkeypatch):
+    skill, world = _find_rig(tmp_path, monkeypatch, start=(0, 0), thing=(-3, 0), facing=0)
+    def target(label="target"):                       # only seen when roughly facing it
+        to = math.atan2(0 - world.z, -3 - world.x)
+        off = abs((to - world.a + math.pi) % (2 * math.pi) - math.pi)
+        return ("mission terminal", 3) if off < math.radians(50) else None
+    skill._target = target
+    res = skill.run(WorldState(":memory:"), what="mission")
+    assert res.ok and res.reason == "in_reach" and len(world.taps) == 3
+
+
+def test_find_nearest_uses_find_and_reads_the_waypoint_position(tmp_path, monkeypatch):
+    from jedai.harness.skills import find as fmod
+    skill, world = _find_rig(tmp_path, monkeypatch, start=(-4991, 4072), thing=(0, 0))
+    world.combo = lambda *k, **kw: world.typed.append("+".join(k))
+    class WP:
+        def __init__(s, n, d): s.name, s.distance = n, d
+    shown = {"wps": []}
+    skill.runner.hud.waypoints = staticmethod(lambda frame, stop: shown["wps"])
+    skill.runner.chat_mark = staticmethod(lambda: 0)
+    def chat_since(mark):
+        shown["wps"] = [WP("Theed (Mission Terminal)", 167)]
+        return ["An active waypoint has be set to the nearest 'Theed (Mission Terminal)'."]
+    skill.runner.chat_since = staticmethod(chat_since)
+    # the datapad: title, one waypoint label in the grid, and the details pane (minus sign lost by the OCR)
+    pad = [("datapad", (858, 450, 930, 466)), ("theed (mission", (1500, 700, 1600, 714)),
+           ("planet:", (878, 862, 930, 876)), ("naboo", (1020, 862, 1070, 876)),
+           ("position:", (878, 910, 950, 924)), ("4865", (1024, 910, 1070, 924)), ("4182", (1114, 910, 1160, 924))]
+    monkeypatch.setattr(fmod, "ocr_boxes", lambda ocr, frame: pad)
+    from jedai.harness.skills import datapad as dmod
+    monkeypatch.setattr(dmod, "ocr_boxes", lambda ocr, frame: pad if frame.shape[0] == 1440 else
+                        [(t, (b[0] - 0, b[1], b[2], b[3])) for t, b in []])
+    monkeypatch.setattr(dmod.CleanWaypoints, "_zoom_ocr", lambda self, frame, cx, cy, half=260, scale=2.0: pad)
+    monkeypatch.setattr(dmod.CleanWaypoints, "_close", lambda self, h: None)
+    res = skill.run(WorldState(":memory:"), what="mission")
+    assert res.ok and res.reason == "waypoint", res
+    wp = res.data["waypoint"]
+    assert (wp["x"], wp["z"], wp["checked"], wp["dist"]) == (-4865, 4182, True, 167)      # sign put right by the distance
+    assert wp["name"] == "theed (mission terminal)" and world.typed[-1] == "/find clear"
+    assert ("CLICK", 1550, 678) in world.taps and world.taps.index(("CLICK", 1119, 488)) < world.taps.index(("CLICK", 1550, 678))
+
+
+def test_chain_find_goes_to_the_find_waypoint_then_looks_again(tmp_path):
+    chain, calls, s = _chain_rig(tmp_path, pos=(-4991, 4072))
+    from jedai.harness.skill import Result as R
+    n = {"n": 0}
+    class Find(Skill):
+        name = "find_nearest"
+        def run(self, state, **a):
+            calls.append(("find_nearest", a))
+            n["n"] += 1
+            if n["n"] == 1:
+                return R("ok", "waypoint", {"waypoint": {"x": -4865, "z": 4182, "name": "theed (mission terminal)", "dist": 167}})
+            return R("ok")
+    chain.registry.register(Find())
+    assert chain.find("mission").ok
+    assert [c[0] for c in calls] == ["find_nearest", "mount", "navigate_to", "clean_waypoints", "find_nearest"]
+    assert calls[2][1]["x"] == -4865
+
+
+def test_places_parse_target_and_locate():
+    from jedai.navigation import places as p
+    assert p.parse_target("target: mission terminal (2m)") == ("mission terminal", 2)
+    assert p.parse_target("mission terminal(l2m") == ("mission terminal", 12)
+    assert p.parse_target("target:") is None
+    r = [(x, z, round(math.hypot(30 - x, -40 - z))) for x, z in [(0, 0), (7, 0), (7, -7)]]
+    x, z, fit = p.locate(r)
+    assert math.hypot(x - 30, z + 40) < 4 and p.spread(r) > 1 > p.spread([(0, 0, 1), (5, 0, 1), (9, 0, 1)])
+    assert p.nearest("naboo", "starport", (5277, 6682))[0]["name"] == "Kaadara Starport"
+
+
+def test_chain_mission_finds_the_terminal_then_takes(tmp_path):
+    chain, calls, s = _chain_rig(tmp_path, pos=(-4857, 4165))
+    from jedai.harness.skill import Result as R
+    def mk(n):
+        class S(Skill):
+            name = n
+            def run(self, state, **a):
+                calls.append((n, a))
+                return R("ok")
+        return S()
+    chain.registry.register(mk("take_mission")); chain.registry.register(mk("find_nearest"))
+    assert chain.mission(dry_run=True).ok
+    assert [c[0] for c in calls] == ["find_nearest", "take_mission"]
+    assert calls[0][1]["what"] == "mission" and calls[1][1]["dry_run"] is True
+
+
+def test_chain_find_falls_back_to_the_nearest_known_place(tmp_path):
+    chain, calls, s = _chain_rig(tmp_path, pos=(-4991, 4072))
+    from jedai.harness.skill import Result as R
+    n = {"n": 0}
+    class Find(Skill):
+        name = "find_nearest"
+        def run(self, state, **a):
+            calls.append(("find_nearest", a))
+            n["n"] += 1
+            if n["n"] == 1:
+                return R("failed", "none_in_range", {"nearest_known": {"name": "mission terminal, theed", "x": -4865, "z": 4182, "dist": 167}})
+            return R("ok")
+    chain.registry.register(Find())
+    assert chain.find("mission").ok
+    assert [c[0] for c in calls] == ["find_nearest", "mount", "navigate_to", "clean_waypoints", "find_nearest"]
+
+
+def test_chain_find_takes_a_shuttle_when_the_nearest_is_in_another_city(tmp_path):
+    chain, calls, s = _chain_rig(tmp_path, pos=(-5491, -22))            # the Lake Retreat
+    from jedai.harness.skill import Result as R
+    n = {"n": 0}
+    class Find(Skill):
+        name = "find_nearest"
+        def run(self, state, **a):
+            calls.append(("find_nearest", a))
+            n["n"] += 1
+            if n["n"] == 1:
+                return R("ok", "waypoint", {"waypoint": {"x": -4865, "z": 4182, "name": "theed (terminal)", "dist": 4036}})
+            if n["n"] == 2:
+                return R("ok", "waypoint", {"waypoint": {"x": -4865, "z": 4182, "name": "theed (terminal)", "dist": 19}})
+            return R("ok", "in_reach")
+    chain.registry.register(Find())
+    class Travel(Skill):
+        name = "travel_to"
+        def run(self, state, **a):
+            calls.append(("travel_to", a))
+            chain.read_position = lambda: (-4857, 4165)
+            return R("ok")
+    chain.registry._skills["travel_to"] = Travel()
+    assert chain.find("mission").ok
+    names = [c[0] for c in calls]
+    assert names[:2] == ["find_nearest", "travel_to"] and calls[1][1]["to"] == "Theed Spaceport"
+    assert names[-3:] == ["navigate_to", "clean_waypoints", "find_nearest"] and calls[-1][1]["near"] is True

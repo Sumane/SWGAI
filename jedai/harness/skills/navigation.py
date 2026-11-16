@@ -103,6 +103,30 @@ class NavigateTo(Skill):
         return Result("stuck", outcome, data)
 
 
+class FollowWaypoint(Skill):
+    """Drive to a waypoint that is already set (e.g. by /find) when its position isn't known:
+    the navigator picks it by the distance it shows and estimates where it is as it goes."""
+    name = "follow_waypoint"
+
+    def __init__(self, runner, settings, sleep=time.sleep):
+        self.runner, self.settings, self.sleep = runner, settings, sleep
+
+    def run(self, state, expect: float | None = None, label: str | None = None, stop: float | None = None, **_) -> Result:
+        try:
+            outcome = self.runner.navigate(target_name=label, expect_dist=expect, target_xz=None, stop_dist=stop)
+        finally:
+            _sync_mount(self.runner, state)
+        pos = self.runner.read_position()
+        if pos is not None:
+            state.set_position(self.settings.planet, pos[0], pos[1])
+        data = {"outcome": outcome}
+        if outcome == "arrived":
+            return Result("ok", "", data)
+        if outcome in ("dead", "no_waypoint") or outcome.startswith("crashed"):
+            return Result("failed", outcome.split(":")[0], data)
+        return Result("stuck", outcome, data)
+
+
 class Mount(Skill):
     """Call the vehicle with its toolbar key (e.g. F1), then the chat commands that
     get on it (e.g. /tar spe, /mount), then switch the navigator to that vehicle."""

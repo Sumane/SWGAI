@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 
-from ..data import load_travel_ports, load_world_points
+from ..data import load_terminals, load_travel_ports, load_world_points
 from .skill import Result
 from .skills.travel import match_point
 
@@ -108,3 +108,74 @@ class Chain:
         if res.ok and clean and "clean_waypoints" in self.registry.names():
             self.step("clean_waypoints", "delete the route waypoint")      # its failure doesn't fail the trip
         return res
+
+    def find(self, what: str, dry_run: bool = False, walk_limit_m: float = 1500.0, _hops: int = 1) -> Result:
+        """Get to the closest <what>, wherever on the planet it is.
+        /find sets a waypoint on the nearest one -> near: go there; far: shuttle to the port
+        beside it, then /find again -> /tar for the last few metres.
+        /find no help: /tar from here, then the nearest one we already know."""
+        res = self.recover_if_dead()
+        if res is not None and not res.ok:
+            return res
+        res = self.step("find_nearest", f"closest {what}", what=what, dry_run=dry_run)
+        if dry_run or (res.ok and res.reason not in ("waypoint", "waypoint_no_position")):
+            return res
+        if not res.ok and res.reason != "none_in_range":
+            return res
+        data = res.data or {}
+        wp, place = data.get("waypoint"), data.get("nearest_known")
+        pos = self._pos()
+        if res.ok and wp:
+            dist = wp.get("dist")
+            if "x" in wp and pos is not None:
+                dist = math.hypot(wp["x"] - pos[0], wp["z"] - pos[1])
+            self.say(f"[chain] /find: {wp.get('name', what)}, {dist:.0f} m away")
+            if dist > walk_limit_m:
+                # another city: by shuttle, not across open country (no combat yet)
+                if "x" not in wp or pos is None or _hops <= 0:
+                    return Result("failed", "nearest_too_far", {**data, "hint": "take a shuttle to that city first"})
+                points = load_world_points().get(self.settings.planet, {}).get("travel", [])
+                port = min(points, key=lambda p: math.hypot(p["x"] - wp["x"], p["z"] - wp["z"]), default=None)
+                if port is None or math.hypot(port["x"] - wp["x"], port["z"] - wp["z"]) >= dist:
+                    return Result("failed", "no_port_nearer", data)
+                self.say(f"[chain] nearest port to it: {port['name']}")
+                self.runner_chat("/find clear")
+                res = self.travel(port["name"])
+                if not res.ok:
+                    return res
+                return self.find(what, walk_limit_m=walk_limit_m, _hops=_hops - 1)
+            if res.reason == "waypoint":
+                res = self.go_to(wp["x"], wp["z"], f"route_{what}", stop=6.0)
+            else:
+                h = self.settings.raw.get("harness", {})
+                if dist > 150 and h.get("mount_key") and not self.state.get("mounted", False):
+                    self.step("mount", f"{dist:.0f} m to go")
+                res = self.step("follow_waypoint", f"the /find waypoint, {dist:.0f} m", expect=dist, stop=8.0)
+                self.runner_chat("/find clear")
+        elif place is not None:
+            self.say(f"[chain] no {what} found from here; nearest known: {place['name']} "
+                     f"at ({place['x']:.0f}, {place['z']:.0f}), {place['dist']} m")
+            if place["dist"] > walk_limit_m:
+                return Result("failed", "nearest_known_too_far", {**data, "hint": "take a shuttle to that city first"})
+            res = self.go_to(place["x"], place["z"], f"route_{what}", stop=4.0)
+        else:
+            return Result("failed", "none_found", data)
+        if not res.ok:
+            return res
+        if "clean_waypoints" in self.registry.names():
+            self.step("clean_waypoints", "delete the route waypoint")
+        return self.step("find_nearest", f"closest {what}, now we're beside it", what=what, near=True)
+
+    def runner_chat(self, text: str) -> None:
+        """A chat command through whichever skill holds the keys (the chain itself has none)."""
+        try:
+            self.registry.get("find_nearest").runner.keys.chat(text)
+        except Exception as e:
+            self.say(f"[chain] couldn't send {text!r}: {e}")
+
+    def mission(self, dry_run: bool = False) -> Result:
+        """Find the closest mission terminal and take a delivery mission."""
+        res = self.find("mission", dry_run=False)
+        if not res.ok:
+            return res
+        return self.step("take_mission", "open the terminal, pick a delivery, accept", dry_run=dry_run)

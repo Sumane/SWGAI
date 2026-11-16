@@ -107,6 +107,7 @@ navigation:
   steer_max_tap_secs: 0.8       # ... capped at this
   steer_lookahead_cells: 3      # steer at a point this many cells along the D* path, not the next cell
   turn_rate_deg_s: 100.0        # how fast LEFT/RIGHT turn (scan_turn_time 0.9 s x 4 steps ~ 360°)
+  standing_turn_deg_s: 42      # turning on the spot is slower (16 Nov: 3.6 s of turning = ~150 deg)
   unstick_back_secs: 1.0        # stuck: reverse this long,
   unstick_forward_secs: 2.0     #   turn 45° (wider if it keeps happening), drive this long
   unstick_escape_secs: 2.0      #   then this long before D* steers again
@@ -205,6 +206,10 @@ harness:
   chatlog_trust_s: 120         # a new harness process trusts a check younger than this
   recover_from_death: true     # on death: clone (pre-designated facility) and walk the recorded route out
   clone_load_wait_s: 60        # longest wait for the loading screen after cloning
+  mission_prefer: short        # take_mission: short = lowest payout (likely this city), rich = highest
+  mission_max_payment: null    # ignore missions paying more than this (payout rises with distance)
+  mission_min_payment: 0
+  mission_target_name: mission # opened with "/tar <this>" + "/ui action defaultAction"; empty = double-click only
   shuttle_wait_s: 420          # travel_to: keep trying /boardShuttle this long (shuttles land every few minutes)
   clean_waypoints_every: 1                       # badge trips between datapad clean-ups; 0 = off
   verify_badges: true      # only count a badge when a new "badge" line shows in chat

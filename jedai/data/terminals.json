@@ -1,0 +1,8 @@
+{
+  "_about": "Where to stand to use city terminals, learned from recordings. 'stand': a spot (world x, z) from which the terminal is close and can be seen.",
+  "naboo": {
+    "mission": [
+      {"city": "theed", "stand": [-4865, 4182], "near": "Theed Spaceport", "recorded": "2026-11-16 mission capture, frames 488-525"}
+    ]
+  }
+}

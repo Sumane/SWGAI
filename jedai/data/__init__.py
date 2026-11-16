@@ -21,3 +21,9 @@ def load_travel_ports() -> dict:
     """{planet: {point name: {"terminal": [x, z], "board": [x, z], ...}}} from travel_ports.json."""
     d = json.loads(Path(__file__).with_name("travel_ports.json").read_text())
     return {k: v for k, v in d.items() if not k.startswith("_")}
+
+
+def load_terminals() -> dict:
+    """{planet: {kind: [{"city": .., "stand": [x, z]}, ...]}} from terminals.json."""
+    d = json.loads(Path(__file__).with_name("terminals.json").read_text())
+    return {k: v for k, v in d.items() if not k.startswith("_")}

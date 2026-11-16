@@ -1,6 +1,6 @@
-# JedAI handoff (10 Nov 2026)
+# JedAI handoff (16 Nov 2026, 14:35)
 
-Paste this into a new project/chat to carry on. It replaces the long chat history.
+Paste this into a new chat to carry on. It replaces the chat history.
 Fuller background: `docs/ROADMAP.md`, `docs/REORGANISATION.md`, `README.md`.
 
 ## 1. What this is
@@ -10,144 +10,148 @@ character to Jedi, by looking at the screen and pressing keys like a player.
 
 - Repo: `SWGAI` (GitHub `Sumane/SWGAI`). On Marc's PC: `~/dev/SWGAI`.
 - Marc's PC (`marc-Agentic`, Ubuntu): game client on Xwayland display `:2`,
-  2560x1440. Python venv `~/venvs/jedai`. GPUs: RTX 3060 (bot vision,
-  `harness.cuda_visible_devices: "0"`) and RTX 5070 Ti (local Qwen).
+  2560x1440. Python venv `~/venvs/jedai`. GPUs: RTX 3060 (bot vision) and
+  RTX 5070 Ti (local Qwen).
 - Game server: Marc's own Core3 on MAGNUS (192.168.0.40).
-- Game install: `/mnt/storage/Swgemu` (moved from `/run/media/marc/New Volume`, 16 Nov).
+- Game install: `/mnt/storage/Swgemu` (start with `bash scripts/linux/start_swg.sh`).
+  Models: `/mnt/storage/SWGEMU_bot/jedai/models`.
 - Map database: `~/jedai-data/jedai_nav_v2.db` (set in `config/settings.local.yaml`).
+- Character on 16 Nov: Naboo, at the Lake Retreat shuttleport (-5491, -22).
 
 ## 2. Rules Marc has set
 
-- **Runtime knowledge:** only what a player could know (wiki-level: starports,
-  badge locations, quest steps). No server telemetry, spawn tables or enemy
-  positions. **Exception (8 Nov): the navmesh is allowed as the base map.**
-- **Stay in cities for now. Avoid combat completely.** The character has no
-  combat skills and the bot has no combat logic. Combat is the last thing to
-  build, together with the LLMs (fast decision model, slow strategy model).
-- Every in-game command becomes a **macro key or a harness tool call** as we
-  meet it. No blind typing into chat.
-- The bot doesn't stop on failure: failures are data. Anything unexpected is
-  ESC'd out of, logged as an anomaly with screenshots, and reviewed later (Qwen).
-- Store the speeder after every dismount. Mount = F1, `/tar speederbike swoop`, `/mount`.
-- Walk when the target is close; mount only beyond 150 m.
+- **Runtime knowledge:** only what a player could know (wiki-level). No server
+  telemetry, spawn tables or enemy positions. Exception: the navmesh is
+  allowed as the base map. Reading Core3 source to learn how a *command*
+  works is fine (that's how /purchaseTicket, /boardShuttle, /find were built).
+- **Stay in cities. Avoid combat completely** until combat is built (last,
+  with the LLMs). Delivery missions are always inside cities; destroy
+  missions are always outside, so the bot only takes Deliver.
+- Every in-game command becomes a macro key or a harness tool call.
+- The bot doesn't stop on failure: failures are data. Unexpected -> ESC out,
+  log an anomaly with screenshots (`data/live/anomalies/`), review later.
+- Store the speeder after every dismount. Mount = F1, `/tar speederbike swoop`,
+  `/mount`. Walk when close; mount only beyond 150 m.
+- **String the systems together when testing** (16 Nov): don't ask Marc to
+  walk the bot somewhere; use the chains so real bugs show up. Marc steps in
+  when needed.
 - Git: never rewrite the authorship of Marc's older commits. Weights stay out
   of git. Never handle Marc's passwords/tokens; don't read `.env` files.
-- Marc prefers blunt, technical answers and will push back on generic ones.
+- Marc prefers blunt, technical answers. Chat length/usage is a concern: keep
+  replies short.
 
 ## 3. How the code is laid out
 
 | Path | What |
 |---|---|
-| `jedai/navigation/` | `runner.py` (the run loop, mount, chat, layers), `navigator.py` (steering, stuck handling, marking), `dstar_lite.py` (planner), `grid_db.py` (SQLite cell map), `navmesh.py` (Core3 navmesh reader), `recorder.py` (per-run logs) |
-| `jedai/perception/` | `hud.py` (coords/waypoint OCR + YOLO), `chat.py` (chat OCR, death/combat words), `chatlog.py` (client chat log file), `tiles.py` (readable screenshot tiles) |
-| `jedai/control/` | key controller process + client (`keys.py`: press, tap, click, combo, chat) |
-| `jedai/harness/` | `state.py` (world state, SQLite), `skill.py`, `log.py`, `system2.py` (badge collector), `supervisor.py`, `skills/navigation.py`, `skills/datapad.py` (delete waypoints) |
-| `jedai/data/world_points.json` | 45 badges + travel points (from Core3 scripts) |
-| `config/settings.yaml` | every tunable; `settings.local.yaml` = Marc's machine overrides |
-| `scripts/` | `harness_live.py` (the one to run), `run_harness.py`, `clean_waypoints.py`, `capture_session.py`, review tools |
-| `tests/` | 150+ tests incl. a driving simulator (`test_simulated_drive.py`) |
-| `docs/qwen_tasks/` | job specs for local Qwen; T07 = review anomalies |
+| `jedai/navigation/` | `runner.py` (run loop, mount, chat), `navigator.py`, `dstar_lite.py`, `grid_db.py`, `navmesh.py`, `route.py` (RouteFollower: walks recorded points from position reads), `places.py` (nearest known place, /find categories, target-bar and datapad-position parsing, `locate()` from distance readings) |
+| `jedai/perception/` | `hud.py` (coords/waypoint OCR), `chat.py`, `chatlog.py` |
+| `jedai/control/` | key controller + client (`keys.py`: press, tap, click, combo, chat) |
+| `jedai/harness/` | `state.py`, `skill.py`, `log.py`, `system2.py` (badge collector), `supervisor.py`, `chain.py` (strings skills together) |
+| `jedai/harness/skills/` | `navigation.py` (navigate_to, follow_waypoint, mount, dismount), `datapad.py` (clean_waypoints), `recover.py` (recover_from_death), `travel.py` (travel_to), `mission.py` (take_mission), `find.py` (find_nearest), `interact.py` (`use_target`: /tar + /ui action) |
+| `jedai/data/` | `world_points.json` (badges, travel points), `clone_routes.json`, `travel_ports.json`, `terminals.json`, `learned_places.json` (written by the bot) |
+| `config/settings.yaml` | every tunable; `settings.local.yaml` = Marc's machine |
+| `scripts/` | `go.py` (chains), `harness_live.py`, `capture_session.py`, `route_from_capture.py`, `travel.py`, `recover_from_death.py` |
+| `tests/` | 190 pass + 1 xfail (`python -m pytest -q tests`, ~2 min) |
 
 ## 4. How to run
 
 ```bash
 cd ~/dev/SWGAI && source ~/venvs/jedai/bin/activate
-python scripts/harness_live.py          # controller + harness loop; F8 or Ctrl+C stops
-python scripts/run_harness.py --list    # badges and what's earned
-python scripts/clean_waypoints.py --dry-run
-python -m pytest -q tests               # ~2.5 min
+python scripts/go.py travel "Keren Starport"      # recover if dead, get to a ticket terminal, buy, board
+python scripts/go.py goto -4865 4182 --stop 3
+python scripts/go.py recover
+python scripts/go.py find mission --dry-run       # /find + datapad read, no walking
+python scripts/go.py find bank                    # any KINDS key or /find category
+python scripts/go.py mission --dry-run            # find terminal (shuttle if needed), read list, take nothing
+python scripts/go.py mission
+python scripts/capture_session.py --name X --minutes N    # record Marc playing
+python scripts/route_from_capture.py data/captures/<dir>  # -> track.json
 ```
 
-Live output: `data/live/` (`harness_out.log`, `screen.jpg`, `tiles/`,
-`anomalies/`, `datapad/`). Per-run recordings: `data/debug_logs/<time>_<target>/`
-(`console.log`, `events.jsonl`, `ticks.jsonl`, `summary.txt`, `report.html`).
-Control files in `data/live/`: `PAUSE`, `STOP`, `SET_MOUNTED`, `RESET_BADGES`.
+Step screenshots + OCR: `data/live/{recover,travel,mission,find,datapad}/`.
+Skill log: `data/harness/logs/<time>/skills.jsonl`. Navigation runs: `data/debug_logs/`.
 
-## 5. Where things stand
+## 5. Commands learned (all usable as chat lines)
 
-Working in-game:
-- Outdoor navigation. 8 Nov: 4,176 m from a walled-in corner of Theed to 30 m
-  from the badge in 390 s (6 stucks).
-- Map v2: navmesh as base map (cities and points of interest only), 2 m cells,
-  cells written only when the bot gets stuck, two strikes (1st bump =
-  "suspect", 2nd = wall). D* searches a bounded box; if no route at all it
-  forgets walls within 50 m and replans.
-- Mount / dismount / store vehicle; waits out the 15 s vehicle call outside cities.
-- Harness: badge collector, world state, skill log, auto-restart on code change.
-- Delete the bot's waypoints through the datapad (Ctrl+D), verified once in-game.
+- `/purchaseTicket <planet> <From_Point> <planet> <To_Point> single` within 8 m
+  of a ticket terminal (spaces -> underscores); "Ticket purchase complete" box.
+- `/boardShuttle` within 25 m of a landed shuttle, on foot.
+- `/tar <start of name>`: only targets what is in the camera's view. The target
+  bar (top right) then shows "<Name> (<n>m)".
+- `/ui action defaultAction` = double-click (use terminal, talk to NPC). Also
+  `radialMenu`, `conversationStart`, `conversationResponseX`, `conversationStop`,
+  `untargetOnly`, `cycleTargetOutward` (SWG wiki "UI Commands"; only
+  defaultAction is wired, none verified in-game yet).
+- `/find <category>` sets an active waypoint on the nearest one on the planet,
+  named "<Region> (<Category>)", e.g. "Theed (Terminal)". `/find clear` removes
+  it. Categories: terminal_mission, terminal_bank, terminal_bazaar,
+  cloningfacility, shuttleport, starport, cantina, capitol, hotel, garage,
+  medicalcenter, salon, vendor_junk, guild_*, trainer_* (six novice trainers).
+  **Verified in-game 16 Nov** (waypoint made, distance read).
+- Datapad (Ctrl+D): details pane shows "Position: x z" for the selected
+  waypoint. It can open on the Data tab; click Waypoints first.
+- `/logChat` logs everything but in lagging chunks.
 
-Verified in-game 16 Nov:
-- `recover_from_death` at Theed: cloned, left the tube, walked to the street.
-- `travel_to`: typed `/purchaseTicket` and `/boardShuttle` work. Theed Shuttle B -> Keren Starport.
-- `python scripts/go.py travel "<port>"` chains recover -> navigate -> travel -> clean
-  from wherever the character is (jedai/harness/chain.py). Marc wants tests run
-  through chains like this, not by walking the character into place.
-- A death only counts with the CLONE ACTIVATED window on screen (old chat lines gave a false alarm).
+## 6. Where things stand
 
-Written but NOT yet verified in-game:
-- `travel_to` skill (16 Nov): `/purchaseTicket <planet> <From> <planet> <To> single`
-  within 8 m of a ticket terminal, then `/boardShuttle` within 25 m of the
-  shuttle (Core3 PurchaseTicketCommand / BoardShuttleCommand; no window
-  clicking). Standing spots per port in `jedai/data/travel_ports.json`.
-  `python scripts/travel.py --to "The Lake Retreat" --dry-run`. Starport
-  interiors need recorded walks: `scripts/route_from_capture.py <capture>`
-  writes a track.json from a recording.
-- `recover_from_death` skill (16 Nov): reads the CLONE ACTIVATED window, picks
-  the pre-designated facility, closes the decay report, walks a recorded route
-  out (`jedai/data/clone_routes.json`, Theed only; `jedai/navigation/route.py`).
-  Test: `python scripts/recover_from_death.py --dry-run` with the window up.
-  Coordinates indoors are ordinary world coordinates. The chat log records
-  system and combat lines exactly, but is written in chunks, so it lags.
-- `/logChat` watcher (10 Nov fix: chat window answer wins; file growth = ON).
-- Death/combat words matched by short stems (OCR garbles the small chat font).
-- Datapad clean-up inside the harness loop (failed twice on 7 Nov, fixed after).
-- "Boxed-in" area layers and the remount-after-dismount logic.
+Verified in-game:
+- Outdoor navigation (map v2, navmesh base, 2 m cells, two strikes).
+- Mount / dismount / store; datapad waypoint clean-up.
+- **recover_from_death** at Theed (clone window, walk out of the facility).
+- **travel_to** at four Naboo ports: Theed Shuttle B, Keren Starport, Theed
+  Spaceport, The Lake Retreat (recorded walks in `travel_ports.json`).
+- `go.py travel` chain.
+- `/find terminal_mission` + waypoint distance; target-bar read ("mission terminal(51m)").
 
-Known problems:
-- 8 Nov: the character was killed by maulers at Amidala's Beach and the bot
-  didn't notice. Leaving cities is unsafe until combat exists.
-- Chat OCR at native size is poor ("you were shatm mauler..."). Needs an
-  enlarged crop, off the driving loop (each read blocks ~0.6 s).
-- Typed commands lose characters sometimes (`/tar speederbike` arrived as
-  `peederbike`). Hence the macro rule.
-- Heading comes from movement, so it's stale after a turn on the spot. The
-  "only blame a faced cell" check exists but is off (`blame_max_angle_deg: 180`).
-- Unknown: whether the client chat log records system messages (badges,
-  combat) or only spoken chat. Test it (Marc expects it logs everything).
-- `navigator.py` (1,300 lines) and `runner.py` (980) carry a lot of patches
-  and switched-off options; due a tidy.
-- No fixed benchmark yet, although the roadmap requires one before merging.
+Written 16 Nov, NOT yet verified in-game:
+- **take_mission**: `/tar mission` + defaultAction (double-click fallback),
+  Deliver tab, read rows, pick lowest payout (`mission_prefer: short`), open
+  details, Accept, check it left the list. Layout offsets come from one
+  recorded frame.
+- **find_nearest**, in this order: `/find` -> read position from datapad,
+  checked against the waypoint's distance (fixes lost minus signs) -> if
+  within 40 m, `/tar` looking all round (6 x 60 deg at `standing_turn_deg_s: 42`)
+  and trilaterate from three spots -> remember the place. Last run stopped at
+  the datapad read because the datapad was on the Data tab; the tab click was
+  added after and is untested.
+- **chain.find / chain.mission**: if the /find waypoint is over 1.5 km away,
+  shuttle to the travel point nearest to it, then /find again, walk, /tar,
+  take_mission.
 
-## 6. Agreed plan (Marc, 10 Nov)
+**Next test:** `python scripts/go.py mission --dry-run` from the Lake Retreat
+(expected: /find -> datapad -> shuttle to Theed Spaceport -> /find -> walk ->
+/tar -> open terminal -> read list).
 
-1. **Die and recover.** Detect death, clone, and get out of the cloning
-   facility. It's a multi-level indoor building, so this is the first piece of
-   indoor navigation and worth real time.
-2. **City work.** Stay inside cities. Skills for mission terminals, bazaar
-   terminals, bank terminals, shuttleport/starport terminals (planet travel
-   lives here), and city points of interest. One shared "window" module: find
-   a window, read its text, click a row.
-3. **Commands as macros or tool calls**, added as each one comes up
-   (mount, store, `/logChat`, waypoint, target...).
-4. **Test the chat log**: confirm `/logChat` stays on and what it records.
-5. **Combat last**, with the LLMs: fast decision model + slow strategy model.
+## 7. To do next
 
-Ideas noted, not agreed: a screen-state check with the local vision model
-(dead? mounted? window open?) every few seconds; a fixed set of benchmark
-routes run after each navigation change.
+1. Get the test above passing (watch: datapad label pick, Position read,
+   port choice, terminal open, list OCR at 16 px text).
+2. **Finish a delivery mission** (Marc's goal, then a full POI-badge run):
+   read the mission waypoint from the datapad (same reader as /find), go to
+   the pickup NPC, talk (`defaultAction` / `conversationStart`), go to the
+   destination NPC (travel chain), hand over, confirm from chat. The
+   recording is `data/captures/2026-11-16_131000_mission_terminal` (1,239
+   frames, `track.json`): Theed terminal (-4865, 4182), pickup NPCs near
+   (-5066, 4195), Dee'ja Peak NPC near (4713, -1364), Kaadara NPC near
+   (4954, 6799). Marc's advice: payout tracks distance; the destination is
+   only known after the pickup; take several missions in one direction.
+3. `clean_waypoints` has the same Data-tab problem: make it click Waypoints first.
+4. Planet-map reader (Marc's idea) only if /find doesn't cover something.
+5. Ticket terminals at ports with no recording (Kaadara, Dee'ja Peak, Moenia,
+   the other Theed/Keren shuttles): try `find_nearest` with `/tar ticket`.
+6. Smooth the start of the Theed Spaceport `to_terminal` walk (8 bumps near
+   (-4849, 4176)); Keren bumps at (1416, 2748) and (1405, 2731).
+7. Bank and bazaar terminals; then combat + LLMs (last).
 
-## 7. How Claude and Marc work together
+## 8. How Claude and Marc work together
 
-- Marc runs the game and the harness; Claude reads `data/live` and
-  `data/debug_logs` from Marc's PC and writes fixes straight into `~/dev/SWGAI`
-  (the harness restarts itself on a code change). After writing, check file
-  sizes on the PC: writes are occasionally stale.
-- **The PC's working tree is the source of truth.** Claude's own copy of the
-  repo lives in a temporary workspace and its commits are not on GitHub. As of
-  10 Nov the PC's files match Claude's last commit, but they are uncommitted
-  there. Marc: commit and push from the PC before starting the new chat.
-- Diagnose from evidence (screenshots, tick logs, events), and say when
-  something is a guess. Several confident diagnoses in the last week were
-  wrong: the water theory, the chat-log "flush" theory (twice), the
-  facing-angle statistic.
-- Qwen task template and work split: `docs/ROADMAP.md` section 3.
+- Marc runs the game; Claude reads `data/live` from Marc's PC and writes fixes
+  straight into `~/dev/SWGAI`.
+- **After every write, list the folder and compare file sizes.** On 16 Nov a
+  write reported success but left the old `find.py`; re-sending from a new
+  staging folder fixed it. Use a fresh staging folder each time.
+- The PC's working tree is the source of truth. Last push: 16 Nov 13:09
+  ("Travel chain verified at all four Naboo ports"). Everything in section 6
+  "written 16 Nov" is uncommitted on the PC: commit and push before the new chat.
+- Diagnose from evidence and say when something is a guess.

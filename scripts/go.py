@@ -6,6 +6,10 @@ clone if dead -> walk/drive to the ticket terminal -> buy -> board -> arrive.
     python scripts/go.py travel "Keren Starport" --from "Theed Shuttle B"
     python scripts/go.py goto -4991 4072                            # just get somewhere (outdoors)
     python scripts/go.py recover                                    # clone and walk out, if dead
+    python scripts/go.py find mission --dry-run                     # /tar mission and report what's there and how far
+    python scripts/go.py find bank                                  # walk up to the closest bank terminal
+    python scripts/go.py mission --dry-run                          # go to a mission terminal, read the list, take nothing
+    python scripts/go.py mission                                    # ...and take a delivery mission
 
 Starts the key controller itself if it isn't running. F8 stops it. You can
 take over at any point; rerun the command and it carries on from where the
@@ -29,6 +33,8 @@ def main():
     g = sub.add_parser("goto"); g.add_argument("x", type=float); g.add_argument("z", type=float)
     g.add_argument("--stop", type=float, default=5.0)
     sub.add_parser("recover")
+    f = sub.add_parser("find"); f.add_argument("what"); f.add_argument("--dry-run", action="store_true")
+    m = sub.add_parser("mission"); m.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 
     from pathlib import Path
@@ -60,6 +66,10 @@ def main():
     try:
         if a.goal == "travel":
             res = chain.travel(a.to, start=a.start)
+        elif a.goal == "find":
+            res = chain.find(a.what, dry_run=a.dry_run)
+        elif a.goal == "mission":
+            res = chain.mission(dry_run=a.dry_run)
         elif a.goal == "goto":
             res = chain.go_to(a.x, a.z, "route_goto", stop=a.stop)
         else:
