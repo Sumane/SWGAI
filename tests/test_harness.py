@@ -1,6 +1,7 @@
 """Harness v0: world points, state, skills, log, System 2, supervisor. No game needed."""
 
 import json
+import math
 import subprocess
 import sys
 from pathlib import Path
@@ -251,7 +252,7 @@ def test_mount_dismount():
 
 def test_registry():
     reg = default_registry(FakeRunner(), WorldState(":memory:"), FakeSettings())
-    assert reg.names() == ["clean_waypoints", "dismount", "mount", "navigate_to"]
+    assert reg.names() == ["clean_waypoints", "dismount", "mount", "navigate_to", "recover_from_death", "travel_to"]
     with pytest.raises(ValueError):
         reg.register(Mount(None, None))
     with pytest.raises(KeyError):
@@ -715,3 +716,285 @@ def test_unseal_forgets_walls_nearby_only(tmp_path):
     p.set_start(0.0, 0.0)
     p.initialise()
     assert p.has_path()
+
+
+# --- routes and recovering from death (16 Nov) --------------------------------
+
+class WalkWorld:
+    """A character on open ground: FORWARD/BACK move it, LEFT/RIGHT turn it. Whole-metre position reads."""
+    def __init__(self, pos, facing_deg, speed=5.0, turn_rate=100.0, sign=-1, walls=()):
+        self.x, self.z = pos
+        self.a = math.radians(facing_deg)
+        self.speed, self.rate, self.sign, self.walls = speed, turn_rate, sign, walls
+        self.taps = []
+
+    def tap(self, key, duration=0.0):
+        self.taps.append((key, round(duration, 2)))
+        if key in ("FORWARD", "BACK"):
+            d = self.speed * duration * (1 if key == "FORWARD" else -1)
+            nx, nz = self.x + d * math.cos(self.a), self.z + d * math.sin(self.a)
+            if not any(x0 <= nx <= x1 and z0 <= nz <= z1 for x0, z0, x1, z1 in self.walls):
+                self.x, self.z = nx, nz
+        elif key in ("LEFT", "RIGHT"):
+            turn = math.radians(self.rate * duration) * (1 if key == "RIGHT" else -1) * self.sign
+            self.a += turn
+
+    def release_all(self): pass
+    def click(self, x, y, button="left"): self.taps.append(("CLICK", x, y))
+    def read(self): return (round(self.x), round(self.z))
+
+
+THEED_ROUTE = None
+
+
+def _theed():
+    from jedai.data import load_clone_routes
+    return load_clone_routes()["naboo"]["theed"]
+
+
+@pytest.mark.parametrize("facing", [0, 90, 200, 315])
+def test_route_follower_walks_the_theed_exit_from_any_facing(facing):
+    from jedai.navigation.route import RouteFollower
+    r = _theed()
+    w = WalkWorld(tuple(r["spawn"]), facing)
+    t = {"t": 0.0}
+    f = RouteFollower(w.read, w, sleep=lambda s: t.__setitem__("t", t["t"] + s), clock=lambda: t["t"] + 0.5 * len(w.taps))
+    outcome, info = f.follow(r["waypoints"])
+    assert outcome == "arrived", info
+    assert math.hypot(w.x - r["exit"][0], w.z - r["exit"][1]) <= 3.5
+    # it went round the corner at the far end, not straight through it
+    assert min(p[0] for p in info["track"]) <= -4899
+
+
+def test_route_follower_gives_up_when_walled_in():
+    from jedai.navigation.route import RouteFollower
+    w = WalkWorld((0, 0), 0, walls=((-50, 3, 50, 50), (-50, -50, 50, -3), (3, -50, 50, 50), (-50, -50, -3, 50)))
+    f = RouteFollower(w.read, w, sleep=lambda s: None, clock=lambda: 0.0, max_stuck=6)
+    assert f.follow([(20, 0)])[0] == "stuck"
+
+
+CLONE_BOXES = [("clone activated", (74, 219, 191, 233)), ("closest:", (88, 246, 130, 258)),
+               ("theed", (172, 246, 204, 258)), ("pre-designated: theed", (88, 258, 204, 270)),
+               ("cash balance: 9708", (88, 270, 196, 282)), ("closest cloning facility", (88, 353, 203, 366)),
+               ("pre-designated facility", (88, 374, 205, 388)), ("ok", (270, 474, 284, 488))]
+DECAY_BOXES = [("decay report", (74, 219, 168, 233)), ("decayed items", (88, 353, 170, 366)),
+               ("ok", (270, 474, 284, 488))]
+
+
+def test_clone_window_is_read():
+    from jedai.harness.skills.recover import clone_window, ok_button
+    w = clone_window(CLONE_BOXES)
+    assert (w["closest"], w["pre"]) == ("theed", "theed") and set(w["rows"]) == {"closest", "pre"}
+    assert ok_button(CLONE_BOXES, w["title"], (1440, 2560, 3)) == (277, 481)
+    assert ok_button([], w["title"], (1440, 2560, 3)) == (277, 481)        # not read: its usual place
+    assert clone_window([("datapad", (1, 1, 9, 9))]) is None
+
+
+def _recover_rig(tmp_path, monkeypatch, screens, start=(-4853, 4033)):
+    import numpy as np
+    from jedai.harness.skills import recover as rmod
+    monkeypatch.setattr(rmod, "ROOT", tmp_path)
+    monkeypatch.setattr(rmod, "ocr_boxes", lambda ocr, frame: next(screens_it, []))
+    screens_it = iter(screens)
+    world = WalkWorld(start, 135)
+
+    class Runner:
+        keys = world
+        mounted = True
+        class hud:
+            class waypoint_reader:
+                ocr = object()
+            @staticmethod
+            def read_coords(frame): return (-4853, 1, 4033)
+        class screen:
+            @staticmethod
+            def grab(): return np.zeros((1440, 2560, 3), np.uint8)
+        class coord_gate:
+            was_reset = False
+            @classmethod
+            def reset(cls, value=None): cls.was_reset = True
+        @staticmethod
+        def read_position(): return world.read()
+        @staticmethod
+        def should_stop(): return False
+        @classmethod
+        def apply_vehicle(cls, key): cls.mounted = key not in ("walking", "running")
+    t = {"t": 0.0}
+    skill = rmod.RecoverFromDeath(Runner, FakeSettings(), sleep=lambda s: t.__setitem__("t", t["t"] + s),
+                                  clock=lambda: t["t"] + 0.5 * len(world.taps))
+    return skill, world, Runner
+
+
+def test_recover_from_death_clones_and_walks_out(tmp_path, monkeypatch):
+    skill, world, runner = _recover_rig(tmp_path, monkeypatch, [CLONE_BOXES, DECAY_BOXES, DECAY_BOXES, []])
+    s = WorldState(":memory:")
+    s.set_position("naboo", -5000, 3000)
+    s.set("mounted", True)
+    res = skill.run(s)
+    assert res.ok and res.data["city"] == "theed", res
+    clicks = [t for t in world.taps if t[0] == "CLICK"]
+    assert clicks[0] == ("CLICK", 146, 381)            # the Pre-Designated row
+    assert clicks[1] == ("CLICK", 277, 481)            # OK
+    assert clicks[2] == ("CLICK", 277, 481)            # the decay report's OK
+    assert s.get("mounted") is False and runner.coord_gate.was_reset
+    assert s.get("deaths") == 1 and s.get("death_spots")[0]["x"] == -5000
+    assert math.hypot(world.x + 4892, world.z - 4045) <= 3.5
+
+
+def test_recover_dry_run_and_unknown_facility(tmp_path, monkeypatch):
+    skill, world, _ = _recover_rig(tmp_path, monkeypatch, [CLONE_BOXES])
+    res = skill.run(WorldState(":memory:"), dry_run=True)
+    assert res.reason == "dry_run" and res.data["route_known"] and not world.taps
+    other = [(t.replace("theed", "keren"), b) for t, b in CLONE_BOXES]
+    skill, world, _ = _recover_rig(tmp_path, monkeypatch, [other, [], []])
+    res = skill.run(WorldState(":memory:"))
+    assert not res.ok and res.reason == "no_route" and res.data["city"] == "keren"
+    assert (tmp_path / "data" / "live" / "anomalies" / "index.jsonl").exists()
+
+
+def test_death_leads_to_recovery_in_the_harness():
+    s = WorldState(":memory:")
+    s.set("planet", "naboo")
+    s.set_position("naboo", 0, 0)
+    bc = BadgeCollector(WP)
+    s.set("dead", True)
+    d = bc.decide(s)
+    assert d.skill == "recover_from_death"
+    bc.on_result(d, Result("failed", "no_route"), s)
+    assert s.get("dead") is True
+    bc.on_result(d, Result("ok"), s)
+    assert s.get("dead") is False and bc.decide(s).skill == "navigate_to"
+
+
+# --- travel (16 Nov) -------------------------------------------------------------
+
+def _travel_rig(tmp_path, monkeypatch, start, shuttle_after=1, buy_ok=True, mounted=False):
+    import numpy as np
+    from jedai.harness.skills import travel as tmod
+    monkeypatch.setattr(tmod, "ROOT", tmp_path)
+    world = WalkWorld(start, 45)
+    world.typed, world.box, world.board_tries = [], [], 0
+
+    def chat(text):
+        world.typed.append(text)
+        if text.startswith("/purchaseTicket") and buy_ok:
+            world.box = [("ticket purchase complete", (392, 340, 518, 353)), ("ok", (599, 427, 613, 441))]
+        if text == "/boardShuttle":
+            world.board_tries += 1
+            if world.board_tries >= shuttle_after:
+                dest = text_dest["p"]
+                world.x, world.z = dest["x"] + 3, dest["z"] - 2
+    world.chat = chat
+    orig_click = world.click
+    def click(x, y, button="left"):
+        orig_click(x, y, button)
+        world.box = []
+    world.click = click
+    world.dismount = lambda *a, **k: world.typed.append("/dismount")
+    monkeypatch.setattr(tmod, "ocr_boxes", lambda ocr, frame: list(world.box))
+    text_dest = {"p": None}
+
+    class Runner:
+        keys = world
+        class hud:
+            class waypoint_reader:
+                ocr = object()
+            @staticmethod
+            def read_coords(frame): return (round(world.x), 6, round(world.z))
+        class screen:
+            @staticmethod
+            def grab(): return np.zeros((1440, 2560, 3), np.uint8)
+        class coord_gate:
+            @staticmethod
+            def reset(value=None): pass
+        @staticmethod
+        def read_position(): return world.read()
+        @staticmethod
+        def should_stop(): return False
+        @classmethod
+        def apply_vehicle(cls, key): cls.mounted = key not in ("walking", "running")
+        @staticmethod
+        def store_vehicle(): world.typed.append("STORE")
+    Runner.mounted = mounted
+    t = {"t": 0.0}
+    skill = tmod.TravelTo(Runner, FakeSettings(), sleep=lambda s: t.__setitem__("t", t["t"] + s),
+                          clock=lambda: t["t"] + 0.5 * len(world.taps))
+    text_dest["p"] = None
+    def run(state, to, **kw):
+        text_dest["p"] = tmod.match_point(skill.wp["naboo"]["travel"], to)
+        return skill.run(state, to=to, **kw)
+    return run, world, Runner
+
+
+def test_travel_buys_and_boards_from_lake_retreat(tmp_path, monkeypatch):
+    run, world, _ = _travel_rig(tmp_path, monkeypatch, start=(-5497, -20), shuttle_after=2, mounted=True)
+    s = WorldState(":memory:")
+    res = run(s, "keren starport")
+    assert res.ok, res
+    assert world.typed[:2] == ["/dismount", "STORE"]                       # on foot first
+    assert "/purchaseTicket naboo The_Lake_Retreat naboo Keren_Starport single" in world.typed
+    assert world.typed.count("/boardShuttle") == 2                          # the shuttle wasn't in the first time
+    assert ("CLICK", 606, 434) in world.taps                                # OK on "Ticket purchase complete"
+    assert s.get("travel_point") == "Keren Starport" and s.position()[1] > 1300
+    # it walked to the terminal spot before buying (8 m rule)
+    assert any(t[0] == "FORWARD" for t in world.taps)
+
+
+def test_travel_dry_run_unknown_and_failures(tmp_path, monkeypatch):
+    run, world, _ = _travel_rig(tmp_path, monkeypatch, start=(-4991, 4072))
+    res = run(WorldState(":memory:"), "The Lake Retreat", dry_run=True)
+    assert res.reason == "dry_run" and res.data["from"] == "Theed Shuttle B" and not world.typed
+    assert res.data["command"] == "/purchaseTicket naboo Theed_Shuttle_B naboo The_Lake_Retreat single"
+    assert run(WorldState(":memory:"), "Mos Eisley").reason == "unknown_destination"
+    run, world, _ = _travel_rig(tmp_path, monkeypatch, start=(0, 0))
+    assert run(WorldState(":memory:"), "The Lake Retreat").reason == "not_at_a_travel_point"
+    run, world, _ = _travel_rig(tmp_path, monkeypatch, start=(-4991, 4072), buy_ok=False)
+    res = run(WorldState(":memory:"), "The Lake Retreat")
+    assert res.reason == "purchase_failed" and "/boardShuttle" not in world.typed
+    assert (tmp_path / "data" / "live" / "anomalies" / "index.jsonl").exists()
+    # a starport whose indoor walk isn't recorded yet: buys nothing blind, says what's missing
+    run, world, _ = _travel_rig(tmp_path, monkeypatch, start=(1369, 2714))
+    res = run(WorldState(":memory:"), "Theed Spaceport")
+    assert res.reason == "terminal_too_far" and not world.typed
+
+
+def test_route_follower_finds_the_way_out_of_a_tube():
+    """Boxed in on three sides (a clone tube): sweep round until a step gets somewhere, then go."""
+    from jedai.navigation.route import RouteFollower
+    w = WalkWorld((0, 0), 90, walls=((-50, -50, -1.5, 50), (1.5, -50, 50, 50), (-50, 1.5, 50, 50)))
+    t = {"t": 0.0}
+    f = RouteFollower(w.read, w, sleep=lambda s: t.__setitem__("t", t["t"] + s), clock=lambda: t["t"])
+    outcome, info = f.follow([(0, -10), (0, -30)])
+    assert outcome == "arrived", info
+    assert info["actions"] and not any(k == "BACK" for k, *_ in w.taps[:6])   # no backing off while sweeping
+
+
+def test_clone_window_values_survive_ocr_wobble():
+    from jedai.harness.skills.recover import clone_window
+    base = [("clone activated", (74, 219, 191, 233)), ("closest cloning facility", (88, 353, 203, 366)),
+            ("pre-designated facility", (88, 374, 205, 388))]
+    for pre in ("pre-designated: theed", "pre-designated; theed", "predesignated theed", "pre-des gnated: theed",
+                "pre designated:theed"):
+        w = clone_window(base + [("closest: keren", (88, 246, 204, 258)), (pre, (88, 258, 204, 270))])
+        assert (w["closest"], w["pre"]) == ("keren", "theed"), pre
+    w = clone_window(base + [("closest:", (88, 246, 130, 258)), ("theed", (172, 246, 204, 258)),
+                             ("pre-designated:", (88, 259, 168, 271)), ("keren", (172, 259, 204, 271))])
+    assert (w["closest"], w["pre"]) == ("theed", "keren")
+
+
+def test_clone_window_16_nov_real_read_and_stuck_window(tmp_path, monkeypatch):
+    """The real OCR from 16 Nov: title misread, and a chat line that says 'clone activation'."""
+    from jedai.harness.skills.recover import clone_ok, clone_window
+    real = [("requesting clone activation", (699, 1377, 849, 1391)), ("clone actiyated", (481, 295, 603, 309)),
+            ("closest:", (495, 329, 539, 343)), ("theed", (579, 329, 613, 343)),
+            ("pre-designated: theed", (495, 341, 611, 353)), ("llosest", (496, 438, 534, 446)),
+            ("cloning facility", (532, 435, 613, 451)), ("designated facility", (514, 456, 615, 471))]
+    w = clone_window(real)
+    assert w["title"] == (481, 295, 603, 309) and (w["closest"], w["pre"]) == ("theed", "theed")
+    assert clone_ok(real, w, (1440, 2560, 3)) == (684, 557)
+    assert clone_window([("requesting clone activation", (699, 1377, 849, 1391))]) is None   # chat alone: not dead
+    # the window never closes: say so, don't walk off
+    skill, world, _ = _recover_rig(tmp_path, monkeypatch, [real] * 30)
+    res = skill.run(WorldState(":memory:"))
+    assert res.reason == "clone_window_wont_close" and not any(t[0] == "FORWARD" for t in world.taps)
+    assert sum(1 for t in world.taps if t == ("CLICK", 684, 557)) == 3

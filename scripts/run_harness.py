@@ -106,7 +106,18 @@ def main():
                          else settings.nav.get("foot_vehicle", "running"))
     state.set("mounted", mounted)
     log = SkillLog(hdir / "logs")
-    sup = Supervisor(default_registry(runner, state, settings), state, log,
+    registry = default_registry(runner, state, settings)
+    recover = bool(h.get("recover_from_death", True))
+
+    def housekeeping():
+        # dead? (the CLONE ACTIVATED window is up): don't type into chat, recover first
+        if recover and not state.get("dead", False) and registry.get("recover_from_death").is_dead():
+            print("[harness] the clone window is on screen: the character is dead")
+            state.set("dead", True)
+        if not state.get("dead", False):
+            runner.ensure_chatlog()
+
+    sup = Supervisor(registry, state, log,
                      BadgeCollector(wp, skip_keys=set(a.skip), can_mount=bool(h.get("mount_key")),
                                     max_failures=int(h.get("max_badge_failures", 2)),
                                     clean_every=int(h.get("clean_waypoints_every", 1))),
@@ -115,7 +126,7 @@ def main():
                      max_steps=a.max_steps, max_minutes=a.minutes,
                      max_consecutive_failures=h.get("max_consecutive_failures", 3),
                      stop_on_exception=bool(h.get("stop_on_exception", True)),
-                     between_steps=runner.ensure_chatlog)
+                     between_steps=housekeeping, recover_from_death=recover)
     try:
         reason = sup.run()
     finally:

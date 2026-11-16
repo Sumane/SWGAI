@@ -197,12 +197,16 @@ harness:
   stop_on_exception: false       # a crashed skill is logged and the next attempt starts
   # The client's chat log (/logChat, switched on at the start of each session).
   # Read directly instead of OCR'ing the chat window. Newest match = current character.
-  chatlog_glob: "/run/media/marc/New Volume/Swgemu/profiles/*/Core3/*_chatlog.txt"
+  chatlog_glob: "/mnt/storage/Swgemu/profiles/*/Core3/*_chatlog.txt"
   datapad_keys: [CTRL, d]                        # opens/closes the datapad (Marc's binding)
   bot_waypoint_prefixes: [badge_, route_, bot_]  # clean_waypoints only deletes these
   chatlog_watch: true          # keep /logChat ON: checked in the chat window at start and between steps
   chatlog_check_min: 10        # re-check this often (types /logChat, reads ON/OFF, fixes it)
   chatlog_trust_s: 120         # a new harness process trusts a check younger than this
+  recover_from_death: true     # on death: clone (pre-designated facility) and walk the recorded route out
+  clone_load_wait_s: 60        # longest wait for the loading screen after cloning
+  clone_exit_timeout_s: 180    # give up walking out after this long (logged as an anomaly)
+  shuttle_wait_s: 420          # travel_to: keep trying /boardShuttle this long (shuttles land every few minutes)
   clean_waypoints_every: 1                       # badge trips between datapad clean-ups; 0 = off
   verify_badges: true      # only count a badge when a new "badge" line shows in chat
   badge_message_wait_s: 2.5

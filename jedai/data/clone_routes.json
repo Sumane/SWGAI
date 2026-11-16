@@ -1,0 +1,101 @@
+{
+ "_about": "Walks out of cloning facilities, one per facility, recorded by a player walking it once (scripts/capture_session.py). Points are world (x, z); 'spawn' is where you appear after cloning; 'heights' are the HUD heights along the way (not used yet).",
+ "naboo": {
+  "theed": {
+   "recorded": "2026-11-16_095536_clone_exit (Marc)",
+   "spawn": [
+    -4853,
+    4033
+   ],
+   "waypoints": [
+    [
+     -4859,
+     4028
+    ],
+    [
+     -4865,
+     4024
+    ],
+    [
+     -4872,
+     4019
+    ],
+    [
+     -4878,
+     4018
+    ],
+    [
+     -4883,
+     4019
+    ],
+    [
+     -4888,
+     4022
+    ],
+    [
+     -4894,
+     4024
+    ],
+    [
+     -4900,
+     4020
+    ],
+    [
+     -4903,
+     4022
+    ],
+    [
+     -4899,
+     4026
+    ],
+    [
+     -4895,
+     4030
+    ],
+    [
+     -4892,
+     4035
+    ],
+    [
+     -4890,
+     4040
+    ],
+    [
+     -4892,
+     4045
+    ]
+   ],
+   "heights": [
+    0,
+    0,
+    0,
+    1,
+    2,
+    6,
+    6,
+    6,
+    6,
+    6,
+    6,
+    6,
+    6,
+    6
+   ],
+   "exit": [
+    -4892,
+    4045
+   ],
+   "spawns_seen": [
+    [
+     -4853,
+     4033
+    ],
+    [
+     -4874,
+     4031
+    ]
+   ],
+   "note": "More than one clone tube: 16 Nov Marc also woke at (-4874, 4031). The walk starts from the nearest route point, whichever tube."
+  }
+ }
+}

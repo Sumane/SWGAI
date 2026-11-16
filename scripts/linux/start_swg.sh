@@ -16,7 +16,7 @@
 # On an Xorg session it just runs the game on your normal display.
 set -euo pipefail
 
-SWG_DIR="${SWG_DIR:-/run/media/marc/New Volume/Swgemu}"
+SWG_DIR="${SWG_DIR:-/mnt/storage/Swgemu}"
 PREFIX="${WINEPREFIX:-$HOME/.wine-swg}"
 DISP="${JEDAI_DISPLAY:-:2}"
 SWG_WINDOW="${SWG_WINDOW:-fullscreen}"   # fullscreen | windowed

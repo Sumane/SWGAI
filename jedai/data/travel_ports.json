@@ -1,0 +1,11 @@
+{
+  "_about": "Where to stand at each travel point, learned from recordings. 'terminal': a spot within 8 m of the ticket terminal (the server's limit for /purchaseTicket). 'board': a spot within 25 m of the shuttle/transport (the limit for /boardShuttle). 'to_board' / 'to_terminal': recorded walks (world x, z) for places where a straight line won't do (starport interiors). Points not listed here: the bot stands where it arrived and tries.",
+  "naboo": {
+    "Theed Shuttle B": {"terminal": [-4991, 4072], "board": [-4991, 4072], "recorded": "2026-11-16 shuttle capture"},
+    "The Lake Retreat": {"arrive": [-5495, -21], "terminal": [-5488, -30], "board": [-5488, -30], "recorded": "2026-11-16 shuttle capture"},
+    "Keren Starport": {"arrive": [1369, 2714], "terminal": [1404, 2759], "board": [1343, 2754],
+                       "to_terminal": null, "to_board": null, "indoor": true, "recorded": "2026-11-16 shuttle capture (walks not extracted yet)"},
+    "Theed Spaceport": {"arrive": [-4826, 4172], "terminal": [-4819, 4168], "board": [-4798, 4250],
+                        "to_board": null, "indoor": true, "recorded": "2026-11-16 shuttle capture (walk not extracted yet)"}
+  }
+}

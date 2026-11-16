@@ -13,7 +13,7 @@ character to Jedi, by looking at the screen and pressing keys like a player.
   2560x1440. Python venv `~/venvs/jedai`. GPUs: RTX 3060 (bot vision,
   `harness.cuda_visible_devices: "0"`) and RTX 5070 Ti (local Qwen).
 - Game server: Marc's own Core3 on MAGNUS (192.168.0.40).
-- Game install: `/run/media/marc/New Volume/Swgemu` (external drive, not always mounted).
+- Game install: `/mnt/storage/Swgemu` (moved from `/run/media/marc/New Volume`, 16 Nov).
 - Map database: `~/jedai-data/jedai_nav_v2.db` (set in `config/settings.local.yaml`).
 
 ## 2. Rules Marc has set
@@ -77,6 +77,19 @@ Working in-game:
 - Delete the bot's waypoints through the datapad (Ctrl+D), verified once in-game.
 
 Written but NOT yet verified in-game:
+- `travel_to` skill (16 Nov): `/purchaseTicket <planet> <From> <planet> <To> single`
+  within 8 m of a ticket terminal, then `/boardShuttle` within 25 m of the
+  shuttle (Core3 PurchaseTicketCommand / BoardShuttleCommand; no window
+  clicking). Standing spots per port in `jedai/data/travel_ports.json`.
+  `python scripts/travel.py --to "The Lake Retreat" --dry-run`. Starport
+  interiors need recorded walks: `scripts/route_from_capture.py <capture>`
+  writes a track.json from a recording.
+- `recover_from_death` skill (16 Nov): reads the CLONE ACTIVATED window, picks
+  the pre-designated facility, closes the decay report, walks a recorded route
+  out (`jedai/data/clone_routes.json`, Theed only; `jedai/navigation/route.py`).
+  Test: `python scripts/recover_from_death.py --dry-run` with the window up.
+  Coordinates indoors are ordinary world coordinates. The chat log records
+  system and combat lines exactly, but is written in chunks, so it lags.
 - `/logChat` watcher (10 Nov fix: chat window answer wins; file growth = ON).
 - Death/combat words matched by short stems (OCR garbles the small chat font).
 - Datapad clean-up inside the harness loop (failed twice on 7 Nov, fixed after).

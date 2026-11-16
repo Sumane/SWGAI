@@ -1,7 +1,7 @@
 """
 Turn Core3 navmesh dumps into the bot's 5 m cell maps, for every planet.
 
-    python scripts/build_navmesh_priors.py "/run/media/marc/New Volume/SWGEMU_bot/navmeshes"
+    python scripts/build_navmesh_priors.py "/mnt/storage/SWGEMU_bot/navmeshes"
 
 Writes data/navmesh_priors/<area>.npz (walkable fraction per cell) and
 <area>.png, plus summary.txt. Rooftops and other islands not connected to

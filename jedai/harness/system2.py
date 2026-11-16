@@ -41,6 +41,8 @@ class BadgeCollector:
                 and state.recent_failures("navigate_to", b["key"]) < self.max_failures]
 
     def decide(self, state: WorldState) -> Decision | None:
+        if state.get("dead", False):
+            return Decision("recover_from_death", {}, "the character died: clone and walk out of the facility")
         pos = state.position()
         if pos is None:
             return None
@@ -67,6 +69,8 @@ class BadgeCollector:
             state.add_badge(decision.args["label"])
         if decision.skill == "navigate_to":
             state.set("waypoint_trips", state.get("waypoint_trips", 0) + 1)
+        if decision.skill == "recover_from_death":
+            state.set("dead", not result.ok)
         if decision.skill == "clean_waypoints":
             # whatever happened: the anomaly is logged, the trip goes on. Two
             # failures in 15 min and it stops trying until they age out.

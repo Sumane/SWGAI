@@ -9,7 +9,7 @@ class Supervisor:
     def __init__(self, registry, state, log, system2, *, planet: str, read_position=None,
                  stop_check=lambda: False, max_steps: int | None = None,
                  max_minutes: float | None = None, max_consecutive_failures: int | None = 3,
-                 stop_on_exception: bool = True, between_steps=None,
+                 stop_on_exception: bool = True, between_steps=None, recover_from_death: bool = False,
                  clock=time.time):
         self.registry, self.state, self.log, self.system2 = registry, state, log, system2
         self.planet = planet
@@ -21,6 +21,7 @@ class Supervisor:
         self.stop_on_exception = stop_on_exception
         self.clock = clock
         self.between_steps = between_steps    # housekeeping before each decision (chat-log watcher)
+        self.recover = recover_from_death     # a death is handled by the recover_from_death skill
         self.steps = 0
 
     def _limit(self, t0: float) -> str | None:
@@ -64,8 +65,12 @@ class Supervisor:
                 print(f"[harness]   -> {result.status} {result.reason}")
                 self.steps += 1
                 fails = 0 if result.ok else fails + 1
-                if result.reason == "dead":
-                    # needs a decision a script can't make yet (clone where?): stop
+                if result.reason == "dead" and self.recover:
+                    # System 2 sends recover_from_death next (16 Nov)
+                    self.state.set("dead", True)
+                    continue
+                if result.reason == "dead" or (decision.skill == "recover_from_death" and not result.ok):
+                    # couldn't recover (or recovery is off): stop and wait for a person
                     reason = "dead"
                     break
                 if result.reason == "exception" and self.stop_on_exception:
