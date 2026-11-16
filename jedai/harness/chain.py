@@ -10,10 +10,16 @@ first step that fails and says which, so a person can step in and rerun.
 from __future__ import annotations
 
 import math
+import re
 
 from ..data import load_terminals, load_travel_ports, load_world_points
 from .skill import Result
 from .skills.travel import match_point
+
+
+def norm_city(s: str) -> str:
+    """'Dee'ja Peak Shuttleport' / "dee'ja peak" -> 'deejapeakshuttleport' / 'deejapeak'."""
+    return re.sub(r"[^a-z]", "", (s or "").lower())
 
 
 class Chain:
@@ -27,7 +33,28 @@ class Chain:
         res = self.log.run_logged(self.registry.get(skill), self.state, "chain", **args)
         self.steps.append((skill, res))
         self.say(f"[chain]    -> {res.status} {res.reason}")
+        if not res.ok and skill != "recover_from_death" and self._died(res):
+            # a step failed because we died: clone and walk out, then report the failure
+            self.state.set("dead", True)
+            rec = self.step("recover_from_death", f"died during {skill}")
+            self.state.set("dead", not rec.ok)
+            return Result("failed", "dead", {**(res.data or {}), "failed_step": skill, "recovered": rec.ok})
         return res
+
+    def _died(self, res: Result) -> bool:
+        """Only asked when a step has failed: did it fail because we're dead?"""
+        if res.reason == "dead":
+            return True
+        try:
+            return bool(self.registry.get("recover_from_death").is_dead())
+        except Exception:
+            return False
+
+    def start(self) -> None:
+        """Every run starts clean (Marc, 16 Nov): no /find waypoint, none of the bot's old ones."""
+        self.runner_chat("/find clear")
+        if "clean_waypoints" in self.registry.names():
+            self.step("clean_waypoints", "start of the run")      # its failure doesn't stop the run
 
     def _pos(self):
         pos = self.read_position()
@@ -37,6 +64,7 @@ class Chain:
 
     # -- goals ----------------------------------------------------------------
     def recover_if_dead(self) -> Result | None:
+        """For `go.py recover` only: the chains don't check up front, a failed step does (step())."""
         rec = self.registry.get("recover_from_death")
         if self.state.get("dead", False) or rec.is_dead():
             self.state.set("dead", True)
@@ -66,9 +94,6 @@ class Chain:
         dest = match_point(points, to)
         if dest is None:
             return Result("failed", "unknown_destination", {"to": to})
-        res = self.recover_if_dead()
-        if res is not None and not res.ok:
-            return res
         pos = self._pos()
         if pos is None:
             return Result("failed", "no_position")
@@ -95,12 +120,8 @@ class Chain:
             res = Result("ok", "at_the_port")
         else:
             res = self.go_to(tx, tz, label, stop=5.0)
-        if not res.ok and res.reason == "dead":
-            # killed on the way: clone, walk out, and set off again (once)
-            self.state.set("dead", True)
-            rec = self.recover_if_dead()
-            if rec is None or not rec.ok:
-                return rec or res
+        if not res.ok and res.reason == "dead" and (res.data or {}).get("recovered"):
+            # killed on the way and cloned (step() did that): set off again, once
             res = self.go_to(tx, tz, label, stop=5.0)
         if not res.ok:
             return res
@@ -109,62 +130,86 @@ class Chain:
             self.step("clean_waypoints", "delete the route waypoint")      # its failure doesn't fail the trip
         return res
 
-    def find(self, what: str, dry_run: bool = False, walk_limit_m: float = 1500.0, _hops: int = 1) -> Result:
+    def find(self, what: str, dry_run: bool = False, walk_limit_m: float = 1500.0, _hopped: bool = False) -> Result:
         """Get to the closest <what>, wherever on the planet it is.
-        /find sets a waypoint on the nearest one -> near: go there; far: shuttle to the port
-        beside it, then /find again -> /tar for the last few metres.
-        /find no help: /tar from here, then the nearest one we already know."""
-        res = self.recover_if_dead()
-        if res is not None and not res.ok:
-            return res
+        /find -> the waypoint panel gives "<City> (<Category>)" and the distance.
+          over walk_limit_m: shuttle to that city's port, /find again (once)
+          otherwise (or already shuttled): follow the waypoint, then /tar for the last few metres.
+        No /find for this kind (or none on the planet): /tar from here, else the nearest place we know."""
         res = self.step("find_nearest", f"closest {what}", what=what, dry_run=dry_run)
-        if dry_run or (res.ok and res.reason not in ("waypoint", "waypoint_no_position")):
+        if dry_run or (res.ok and res.reason != "waypoint"):
             return res
         if not res.ok and res.reason != "none_in_range":
             return res
         data = res.data or {}
         wp, place = data.get("waypoint"), data.get("nearest_known")
         pos = self._pos()
-        if res.ok and wp:
-            dist = wp.get("dist")
-            if "x" in wp and pos is not None:
-                dist = math.hypot(wp["x"] - pos[0], wp["z"] - pos[1])
-            self.say(f"[chain] /find: {wp.get('name', what)}, {dist:.0f} m away")
-            if dist > walk_limit_m:
+        if res.ok:
+            dist, city = wp["dist"], wp.get("city", "")
+            self.say(f"[chain] /find: {wp.get('name', what)} ({city}), {dist} m away")
+            if dist > walk_limit_m and not _hopped:
                 # another city: by shuttle, not across open country (no combat yet)
-                if "x" not in wp or pos is None or _hops <= 0:
-                    return Result("failed", "nearest_too_far", {**data, "hint": "take a shuttle to that city first"})
-                points = load_world_points().get(self.settings.planet, {}).get("travel", [])
-                port = min(points, key=lambda p: math.hypot(p["x"] - wp["x"], p["z"] - wp["z"]), default=None)
-                if port is None or math.hypot(port["x"] - wp["x"], port["z"] - wp["z"]) >= dist:
-                    return Result("failed", "no_port_nearer", data)
-                self.say(f"[chain] nearest port to it: {port['name']}")
+                port = self.port_in(city, dist, pos, known=place)
+                if port is None:
+                    return Result("failed", "no_port_in_city", {**data, "city": city})
+                self.say(f"[chain] shuttle to {port['name']}")
                 self.runner_chat("/find clear")
                 res = self.travel(port["name"])
                 if not res.ok:
                     return res
-                return self.find(what, walk_limit_m=walk_limit_m, _hops=_hops - 1)
-            if res.reason == "waypoint":
-                res = self.go_to(wp["x"], wp["z"], f"route_{what}", stop=6.0)
-            else:
-                h = self.settings.raw.get("harness", {})
-                if dist > 150 and h.get("mount_key") and not self.state.get("mounted", False):
-                    self.step("mount", f"{dist:.0f} m to go")
-                res = self.step("follow_waypoint", f"the /find waypoint, {dist:.0f} m", expect=dist, stop=8.0)
-                self.runner_chat("/find clear")
+                return self.find(what, walk_limit_m=walk_limit_m, _hopped=True)
+            h = self.settings.raw.get("harness", {})
+            if dist > 150 and h.get("mount_key") and not self.state.get("mounted", False):
+                self.step("mount", f"{dist} m to go")          # a failed mount isn't fatal: walk
+            res = self.step("follow_waypoint", f"the /find waypoint, {dist} m", expect=dist, stop=8.0)
+            self.runner_chat("/find clear")
         elif place is not None:
             self.say(f"[chain] no {what} found from here; nearest known: {place['name']} "
                      f"at ({place['x']:.0f}, {place['z']:.0f}), {place['dist']} m")
             if place["dist"] > walk_limit_m:
-                return Result("failed", "nearest_known_too_far", {**data, "hint": "take a shuttle to that city first"})
+                if pos is None or _hopped:
+                    return Result("failed", "nearest_known_too_far", {**data, "hint": "take a shuttle to that city first"})
+                hop = self._shuttle_towards(place["x"], place["z"], place["dist"], data)
+                if hop is None:
+                    return Result("failed", "nearest_known_too_far", {**data, "hint": "take a shuttle to that city first"})
+                if not hop.ok:
+                    return hop
+                return self.find(what, walk_limit_m=walk_limit_m, _hopped=True)
             res = self.go_to(place["x"], place["z"], f"route_{what}", stop=4.0)
         else:
             return Result("failed", "none_found", data)
         if not res.ok:
             return res
-        if "clean_waypoints" in self.registry.names():
-            self.step("clean_waypoints", "delete the route waypoint")
         return self.step("find_nearest", f"closest {what}, now we're beside it", what=what, near=True)
+
+    def port_in(self, city: str, dist: float, pos, known: dict | None = None) -> dict | None:
+        """The travel point in `city` (from the waypoint's name) to shuttle to. A city can have
+        several: the one nearest a place of this kind we already know in that city, else the
+        one whose distance from here is nearest the waypoint's (a rough guess: ~100 m apart at 4 km)."""
+        import difflib
+        points = load_world_points().get(self.settings.planet, {}).get("travel", [])
+        key = norm_city(city)
+        if not key:
+            return None
+        same = [p for p in points if norm_city(p["name"]).startswith(key)
+                or difflib.SequenceMatcher(None, norm_city(p["name"])[:len(key)], key).ratio() >= 0.75]
+        if not same:
+            return None
+        if known and key in norm_city(known.get("name", "")) and "x" in known:
+            return min(same, key=lambda p: math.hypot(p["x"] - known["x"], p["z"] - known["z"]))
+        if pos is None:
+            return same[0]
+        return min(same, key=lambda p: abs(math.hypot(p["x"] - pos[0], p["z"] - pos[1]) - dist))
+
+    def _shuttle_towards(self, x: float, z: float, dist: float, data: dict) -> Result | None:
+        """Shuttle to the travel point nearest (x, z). None if no port is nearer to it than we are."""
+        points = load_world_points().get(self.settings.planet, {}).get("travel", [])
+        port = min(points, key=lambda p: math.hypot(p["x"] - x, p["z"] - z), default=None)
+        if port is None or math.hypot(port["x"] - x, port["z"] - z) >= dist:
+            return None
+        self.say(f"[chain] nearest port to ({x:.0f}, {z:.0f}): {port['name']}")
+        self.runner_chat("/find clear")
+        return self.travel(port["name"])
 
     def runner_chat(self, text: str) -> None:
         """A chat command through whichever skill holds the keys (the chain itself has none)."""

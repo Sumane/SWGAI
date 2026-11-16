@@ -1,0 +1,15 @@
+{
+ "naboo": {
+  "mission": [
+   {
+    "name": "mission terminal",
+    "x": -4835,
+    "z": 4156,
+    "thing_at": [
+     -4837.0,
+     4157.1
+    ]
+   }
+  ]
+ }
+}

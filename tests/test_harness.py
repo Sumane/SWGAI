@@ -579,7 +579,7 @@ def test_clean_waypoints_escapes_and_logs_when_label_returns(tmp_path, monkeypat
     class OCR:
         pass
 
-    seq = iter([grid, [], confirm, grid,            # 1st try: after Yes, still listed
+    seq = iter([grid, grid, [], confirm, grid,      # (Waypoints tab look) 1st try: after Yes, still listed
                 grid])                              # then the "came back" check
     class Runner:
         keys = Keys()
@@ -1017,21 +1017,41 @@ def _chain_rig(tmp_path, pos, dead=False, fail=None):
     reg = SkillRegistry()
     reg.register(mk("recover_from_death", lambda a: where.__setitem__("p", (-4892, 4045))))
     reg.register(mk("navigate_to", lambda a: where.__setitem__("p", (a["x"] + 2, a["z"]))))
-    for n in ("mount", "travel_to", "clean_waypoints"):
+    for n in ("mount", "travel_to", "clean_waypoints", "follow_waypoint"):
         reg.register(mk(n))
     s = WorldState(":memory:")
     chain = Chain(reg, s, SkillLog(tmp_path / "logs"), FakeSettings(), lambda: where["p"], say=lambda m: None)
     return chain, calls, s
 
 
-def test_chain_travel_strings_recover_navigate_buy_and_clean(tmp_path):
+def test_chain_travel_strings_navigate_buy_and_clean(tmp_path):
     chain, calls, s = _chain_rig(tmp_path, pos=(-4902, 3911), dead=True)
     res = chain.travel("keren starport")
     assert res.ok
-    assert [c[0] for c in calls] == ["recover_from_death", "navigate_to", "travel_to", "clean_waypoints"]
+    # no death check up front (Marc, 16 Nov): only a failed step asks
+    assert [c[0] for c in calls] == ["mount", "navigate_to", "travel_to", "clean_waypoints"]
     nav = calls[1][1]
     assert (nav["x"], nav["z"], nav["stop"]) == (-4991, 4072, 5.0) and nav["label"] == "route_theed_shuttle_b"
-    assert calls[2][1] == {"to": "Keren Starport"} and s.get("dead") is False
+    assert calls[2][1] == {"to": "Keren Starport"}
+
+
+def test_chain_clones_only_when_a_step_fails_and_we_are_dead(tmp_path):
+    chain, calls, s = _chain_rig(tmp_path, pos=(-5400, 4300), dead=True, fail="navigate_to")
+    res = chain.travel("Keren Starport", start="Theed Shuttle B")
+    assert not res.ok and res.reason == "dead" and res.data["recovered"] is True
+    assert [c[0] for c in calls][:3] == ["mount", "navigate_to", "recover_from_death"]
+    assert s.get("dead") is False
+    chain, calls, _ = _chain_rig(tmp_path, pos=(-5400, 4300), dead=False, fail="navigate_to")
+    res = chain.travel("Keren Starport", start="Theed Shuttle B")
+    assert res.reason == "boom" and "recover_from_death" not in [c[0] for c in calls]
+
+
+def test_chain_start_clears_find_and_cleans_waypoints(tmp_path):
+    chain, calls, _ = _chain_rig(tmp_path, pos=(0, 0))
+    said = []
+    chain.runner_chat = lambda t: said.append(t)
+    chain.start()
+    assert said == ["/find clear"] and [c[0] for c in calls] == ["clean_waypoints"]
 
 
 def test_chain_skips_what_isnt_needed_and_stops_at_a_failure(tmp_path):
@@ -1301,35 +1321,31 @@ def test_find_nearest_turns_to_see_a_terminal_behind(tmp_path, monkeypatch):
     assert res.ok and res.reason == "in_reach" and len(world.taps) == 3
 
 
-def test_find_nearest_uses_find_and_reads_the_waypoint_position(tmp_path, monkeypatch):
-    from jedai.harness.skills import find as fmod
-    skill, world = _find_rig(tmp_path, monkeypatch, start=(-4991, 4072), thing=(0, 0))
-    world.combo = lambda *k, **kw: world.typed.append("+".join(k))
+def test_find_nearest_reads_city_and_distance_from_the_waypoint_panel(tmp_path, monkeypatch):
+    skill, world = _find_rig(tmp_path, monkeypatch, start=(-5491, -22), thing=(0, 0))
     class WP:
         def __init__(s, n, d): s.name, s.distance = n, d
-    shown = {"wps": []}
+    shown = {"wps": [WP("my house", 900)]}                       # the player's own: left alone
     skill.runner.hud.waypoints = staticmethod(lambda frame, stop: shown["wps"])
     skill.runner.chat_mark = staticmethod(lambda: 0)
     def chat_since(mark):
-        shown["wps"] = [WP("Theed (Mission Terminal)", 167)]
-        return ["An active waypoint has be set to the nearest 'Theed (Mission Terminal)'."]
+        shown["wps"] = shown["wps"] + [WP("Theed (Terminal)", 4036)]
+        return ["An active waypoint has been set to the nearest 'Theed (Terminal)'."]
     skill.runner.chat_since = staticmethod(chat_since)
-    # the datapad: title, one waypoint label in the grid, and the details pane (minus sign lost by the OCR)
-    pad = [("datapad", (858, 450, 930, 466)), ("theed (mission", (1500, 700, 1600, 714)),
-           ("planet:", (878, 862, 930, 876)), ("naboo", (1020, 862, 1070, 876)),
-           ("position:", (878, 910, 950, 924)), ("4865", (1024, 910, 1070, 924)), ("4182", (1114, 910, 1160, 924))]
-    monkeypatch.setattr(fmod, "ocr_boxes", lambda ocr, frame: pad)
-    from jedai.harness.skills import datapad as dmod
-    monkeypatch.setattr(dmod, "ocr_boxes", lambda ocr, frame: pad if frame.shape[0] == 1440 else
-                        [(t, (b[0] - 0, b[1], b[2], b[3])) for t, b in []])
-    monkeypatch.setattr(dmod.CleanWaypoints, "_zoom_ocr", lambda self, frame, cx, cy, half=260, scale=2.0: pad)
-    monkeypatch.setattr(dmod.CleanWaypoints, "_close", lambda self, h: None)
     res = skill.run(WorldState(":memory:"), what="mission")
     assert res.ok and res.reason == "waypoint", res
     wp = res.data["waypoint"]
-    assert (wp["x"], wp["z"], wp["checked"], wp["dist"]) == (-4865, 4182, True, 167)      # sign put right by the distance
-    assert wp["name"] == "theed (mission terminal)" and world.typed[-1] == "/find clear"
-    assert ("CLICK", 1550, 678) in world.taps and world.taps.index(("CLICK", 1119, 488)) < world.taps.index(("CLICK", 1550, 678))
+    assert (wp["name"], wp["city"], wp["dist"]) == ("Theed (Terminal)", "Theed", 4036)
+    assert world.typed == ["/find terminal_mission"] and world.taps == []        # no datapad, no /tar sweep
+
+
+def test_find_nearest_stops_when_the_panel_never_shows_the_find_waypoint(tmp_path, monkeypatch):
+    skill, world = _find_rig(tmp_path, monkeypatch, start=(-5491, -22), thing=(0, 0))
+    skill.runner.hud.waypoints = staticmethod(lambda frame, stop: [])
+    skill.runner.chat_mark = staticmethod(lambda: 0)
+    skill.runner.chat_since = staticmethod(lambda m: ["an active waypoint has been set to the nearest 'theed (terminal)'."])
+    res = skill.run(WorldState(":memory:"), what="mission")
+    assert not res.ok and res.reason == "waypoint_not_read" and world.taps == []     # no 6-way /tar from 4 km
 
 
 def test_chain_find_goes_to_the_find_waypoint_then_looks_again(tmp_path):
@@ -1342,12 +1358,12 @@ def test_chain_find_goes_to_the_find_waypoint_then_looks_again(tmp_path):
             calls.append(("find_nearest", a))
             n["n"] += 1
             if n["n"] == 1:
-                return R("ok", "waypoint", {"waypoint": {"x": -4865, "z": 4182, "name": "theed (mission terminal)", "dist": 167}})
+                return R("ok", "waypoint", {"waypoint": {"name": "Theed (Terminal)", "city": "Theed", "dist": 167}})
             return R("ok")
     chain.registry.register(Find())
     assert chain.find("mission").ok
-    assert [c[0] for c in calls] == ["find_nearest", "mount", "navigate_to", "clean_waypoints", "find_nearest"]
-    assert calls[2][1]["x"] == -4865
+    assert [c[0] for c in calls] == ["find_nearest", "mount", "follow_waypoint", "find_nearest"]
+    assert calls[2][1]["expect"] == 167 and calls[3][1]["near"] is True
 
 
 def test_places_parse_target_and_locate():
@@ -1391,7 +1407,7 @@ def test_chain_find_falls_back_to_the_nearest_known_place(tmp_path):
             return R("ok")
     chain.registry.register(Find())
     assert chain.find("mission").ok
-    assert [c[0] for c in calls] == ["find_nearest", "mount", "navigate_to", "clean_waypoints", "find_nearest"]
+    assert [c[0] for c in calls] == ["find_nearest", "mount", "navigate_to", "find_nearest"]
 
 
 def test_chain_find_takes_a_shuttle_when_the_nearest_is_in_another_city(tmp_path):
@@ -1404,9 +1420,9 @@ def test_chain_find_takes_a_shuttle_when_the_nearest_is_in_another_city(tmp_path
             calls.append(("find_nearest", a))
             n["n"] += 1
             if n["n"] == 1:
-                return R("ok", "waypoint", {"waypoint": {"x": -4865, "z": 4182, "name": "theed (terminal)", "dist": 4036}})
+                return R("ok", "waypoint", {"waypoint": {"name": "Theed (Terminal)", "city": "Theed", "dist": 4036}})
             if n["n"] == 2:
-                return R("ok", "waypoint", {"waypoint": {"x": -4865, "z": 4182, "name": "theed (terminal)", "dist": 19}})
+                return R("ok", "waypoint", {"waypoint": {"name": "Theed (Terminal)", "city": "Theed", "dist": 120}})
             return R("ok", "in_reach")
     chain.registry.register(Find())
     class Travel(Skill):
@@ -1418,5 +1434,9 @@ def test_chain_find_takes_a_shuttle_when_the_nearest_is_in_another_city(tmp_path
     chain.registry._skills["travel_to"] = Travel()
     assert chain.find("mission").ok
     names = [c[0] for c in calls]
-    assert names[:2] == ["find_nearest", "travel_to"] and calls[1][1]["to"] == "Theed Spaceport"
-    assert names[-3:] == ["navigate_to", "clean_waypoints", "find_nearest"] and calls[-1][1]["near"] is True
+    # Theed has four ports: the one whose distance from here is nearest the waypoint's 4036 m...
+    assert names[:2] == ["find_nearest", "travel_to"] and calls[1][1]["to"] == "Theed Shuttle B"
+    # ...unless we already know a mission terminal in Theed: then the port beside it
+    known = {"name": "mission terminal, theed", "x": -4865, "z": 4182}
+    assert chain.port_in("Theed", 4036, (-5491, -22), known=known)["name"] == "Theed Spaceport"
+    assert names[-2:] == ["follow_waypoint", "find_nearest"] and calls[-1][1]["near"] is True

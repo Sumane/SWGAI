@@ -1,21 +1,18 @@
 """
 find_nearest: "find our closest <thing>" (Marc, 16 Nov 2026).
 
-  1. /tar <name>; the target bar (top right) answers "<Name> (<n>m)". /tar only
-     takes what is in front of the camera, so turn a quarter and try again, all
-     the way round.
-  2. Close enough to use? Done.
-  3. Seen but further off: take the distance from three spots, work out where
-     the thing is (navigation/places.locate), walk there, check again.
-  4. Not seen at all: "/find <category>" makes the game set an active waypoint
-     on the nearest one on the planet ("Theed (Mission Terminal)"). Its
-     position is read from the datapad (details pane, "Position: x z") and
-     checked against the distance the waypoint itself shows. The chain then
-     travels there and runs this skill again for the last few metres.
-  5. Remember the spot, so next time it's a known place.
+  1. "/find <category>": the game sets a waypoint on the nearest one on the
+     planet, named "<City> (<Category>)", e.g. "Theed (Terminal)". The waypoint
+     panel (YOLO) gives its name and distance straight away: the city tells the
+     chain where to shuttle, the distance whether to shuttle at all.
+  2. Within 40 m: /find clear, then /tar <name>, looking all round; the target
+     bar answers "<Name> (<n>m)". Close enough to use? Done.
+  3. Seen but further off: the distance from three spots works out where it is
+     (navigation/places.locate); walk there, check again.
+  4. Remember the spot, so next time it's a known place.
 
-If neither works, the answer is the nearest place we already know (recorded,
-wiki, or found earlier).
+Waypoints from earlier runs are cleared at the start of every run (chain.start),
+so the panel only shows what this /find made.
 """
 
 from __future__ import annotations
@@ -28,7 +25,7 @@ from pathlib import Path
 
 from ...navigation import places
 from ..skill import Result
-from .datapad import CleanWaypoints, datapad_region, find_text, ocr_boxes
+from .datapad import norm, ocr_boxes
 from .travel import TravelTo
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -102,29 +99,10 @@ class FindNearest(TravelTo):
             print(f"[find] waypoint list not read: {e}")
             return []
 
-    def _pane_position(self, dp, frame, region):
-        """'Position: x z' in the datapad's details pane (left ~22% of the window), read at 2x and 3x."""
-        x0, y0, x1, y1 = region
-        cx, cy = x0 + int(0.12 * (x1 - x0)), (y0 + y1) // 2
-        reads = []
-        for scale in (2.0, 3.0):
-            boxes = dp._zoom_ocr(frame, cx, cy, half=max(cx - x0, (y1 - y0) // 2) + 20, scale=scale)
-            lab = find_text(boxes, "position", "positlon", "posltion")
-            if lab is None:
-                continue
-            hh = lab[3] - lab[1]
-            line = sorted((b[0], t) for t, b in boxes
-                          if b != lab and abs(b[1] - lab[1]) <= hh and lab[2] - 4 <= b[0] <= lab[2] + 12 * hh)
-            got = places.parse_position([t for _, t in line])
-            if got:
-                reads.append(got)
-        return reads
-
-    def _find_waypoint(self, info, pos):
-        """/find <category>, then read where its waypoint is. Returns a dict (maybe without x, z) or None."""
-        h = self.settings.raw.get("harness", {})
+    def _find_hud(self, info, reads: int = 3):
+        """/find <category>, then the waypoint panel: {"category", "name", "city", "dist"}.
+        None if the game has none on this planet; no "dist" if the panel never showed it."""
         keys = self.runner.keys
-        before = self._hud_waypoints()
         mark = self.runner.chat_mark() if hasattr(self.runner, "chat_mark") else None
         keys.chat(f"/find {info['find']}")
         self.sleep(2.0)
@@ -133,62 +111,23 @@ class FindNearest(TravelTo):
             return None
         out = {"category": info["find"], "chat": lines[-3:]}
         m = next((re.search(r"nearest\s*['\"`]?([^'\"`]+)", ln) for ln in lines if "nearest" in ln), None)
-        if m:
-            out["name"] = m.group(1).strip(" .")
-        # the distance the new waypoint shows
-        after = self._hud_waypoints()
-        new = [(n, d) for n, d in after if not any(abs(d - d0) <= 3 for _, d0 in before)]
-        named = [(n, d) for n, d in new if info["word"] in n.lower()]
-        pick = (named or new or [(n, d) for n, d in after if info["word"] in n.lower()])
-        if pick:
-            out["dist"] = pick[0][1]
-        out["hud"] = after
-        # where it is: datapad, select the waypoint, read the details pane
-        dp = CleanWaypoints(self.runner, self.settings, sleep=self.sleep)
-        dp._dir = self._dir
-        dp._step, dp.anomalies = self._step, []
-        words = {info["word"]} | {w for w in re.findall(r"[a-z]{4,}", out.get("name", ""))}
-        keys.combo(*h.get("datapad_keys", ["CTRL", "d"]))
-        self.sleep(1.5)
-        try:
-            frame, boxes = dp._look("find_datapad")
-            region = datapad_region(boxes, frame.shape)
-            if region is None:
-                out["why"] = "datapad_not_found"
+        said = norm(m.group(1).strip(" .")) if m else None
+        for i in range(reads):
+            wps = self._hud_waypoints()
+            out["hud"] = wps
+            # the one /find made: the name chat gave, else "<city> (<something>)" - the run started
+            # with no waypoints but the player's own, and those don't look like that
+            pick = [(n, d) for n, d in wps if said and (norm(n) == said or norm(n)[:8] == said[:8])]
+            pick = pick or [(n, d) for n, d in wps if re.search(r"\(.+\)", n or "")]
+            if pick:
+                name, dist = pick[0]
+                out.update(name=name, dist=dist, city=re.split(r"\s*\(", name)[0].strip())
                 return out
-            x0, y0, x1, y1 = region
-            gx0 = x0 + int(0.225 * (x1 - x0))
-            k = frame.shape[0] / 1440
-            # 16 Nov: the datapad opened on its Data tab (vehicles). Go to Waypoints first.
-            tab = next((b for t, b in boxes if t.startswith("waypoint") and b[1] < y0 + 70 * k and b[0] >= gx0 - 20 * k), None)
-            keys.click(*(((tab[0] + tab[2]) // 2, (tab[1] + tab[3]) // 2) if tab else (x0 + int(271 * k), y0 + int(38 * k))))
-            self.sleep(0.8)
-            frame, boxes = dp._look("find_waypoints_tab")
-            grid = [(t, b) for t, b in boxes if gx0 <= b[0] and b[2] <= x1 and y0 + 70 * k <= b[1] and b[3] <= y1 - 90 * k
-                    and len(t.strip()) >= 3 and t.strip(" .") != "waypoint"]
-            hits = [(t, b) for t, b in grid if any(w in t for w in words)]
-            # the ones that look right first; then any other, accepted only if its position fits the distance
-            cands = hits + [tb for tb in grid if tb not in hits]
-            out["labels"] = [t for t, _ in cands]
-            for t, b in cands[:8]:
-                keys.click((b[0] + b[2]) // 2, b[1] - int(1.6 * (b[3] - b[1])))
-                self.sleep(0.7)
-                frame, _ = dp._look("find_selected")
-                reads = self._pane_position(dp, frame, region)
-                out.setdefault("reads", []).extend(reads)
-                for r in reads:
-                    ok = places.check_position(r, pos, out.get("dist"))
-                    if ok:
-                        out.update(x=ok[0], z=ok[1], checked=True, label=t)
-                        return out
-                if (t, b) in hits and len(reads) == 2 and reads[0] == reads[1] and "dist" not in out:
-                    out.update(x=reads[0][0], z=reads[0][1], checked=False, label=t)   # two reads agree, nothing to check against
-                    return out
-            out["why"] = "no_label_in_datapad" if not cands else "position_not_confirmed"
-            return out
-        finally:
-            self._step = dp._step
-            dp._close(h)
+            self.sleep(0.7)
+        if not said:
+            return None            # no answer in chat and nothing on the panel: /find did nothing here
+        out.update(name=said, city=said.split("_(")[0].replace("_", " "))
+        return out                 # chat named it but the panel never showed it: no distance
 
     def _reading(self, info, label, readings):
         pos = self._raw_pos()
@@ -218,23 +157,20 @@ class FindNearest(TravelTo):
         place, far = places.nearest(planet, what, pos, self.learned_path)
         data = {"what": what, "pos": pos,
                 "nearest_known": ({**place, "dist": round(far)} if place else None)}
-        # 1. /find: the game sets a waypoint on the nearest one on the planet (Marc, 16 Nov: use this first)
+        # 1. /find: the waypoint panel says which city and how far (Marc, 16 Nov)
         if not near and info.get("find"):
-            wp = self._find_waypoint(info, pos)
+            wp = self._find_hud(info)
             if wp is not None:
                 data["waypoint"] = wp
-                dist = math.hypot(wp["x"] - pos[0], wp["z"] - pos[1]) if "x" in wp else wp.get("dist")
-                print(f"[find] /find {info['find']}: {wp.get('name', '?')}, {dist if dist is None else round(dist)} m, "
-                      f"position {(wp.get('x'), wp.get('z')) if 'x' in wp else 'not read (' + str(wp.get('why')) + ')'}")
+                dist = wp.get("dist")
+                print(f"[find] /find {info['find']}: {wp.get('name', '?')}, {dist} m")
                 if dist is None:
+                    # a waypoint we can't read is no use, and /tar can't reach 4 km: stop and log
                     self._anomaly("find_waypoint_not_read", **data)
-                elif dist > 40 or not info.get("target"):
-                    if "x" in wp:
-                        keys.chat("/find clear")       # we have the position: no need for its waypoint
-                        return Result("ok", "waypoint", data)
-                    return Result("ok", "waypoint_no_position", data)
-                else:
-                    keys.chat("/find clear")           # it's right here: /tar does the rest
+                    return Result("failed", "waypoint_not_read", {**data, "anomalies": self.anomalies})
+                if dist > 40 or not info.get("target"):
+                    return Result("ok", "waypoint", data)
+                keys.chat("/find clear")           # it's right here: /tar does the rest
         # 2. /tar, looking all round: the last few metres
         got = self._probe_round(info)
         if got is None:

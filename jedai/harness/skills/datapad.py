@@ -21,12 +21,33 @@ from pathlib import Path
 from ..skill import Result, Skill
 
 
+OCR_MAX_SIDE = 1800   # cap for *enlarged crops* only: 2460^2 at 3x OOM'd the 3060 (16 Nov).
+                      # Full frames stay 2560 wide: shrinking them made 16 px UI text unreadable.
+
+
 def ocr_boxes(ocr, img, x0=0, y0=0):
-    """[(text_lower, (x1, y1, x2, y2))] in full-frame pixels."""
+    """[(text_lower, (x1, y1, x2, y2))] in full-frame pixels. On CUDA OOM retries once at half size."""
+    import cv2
+    k = 1.0
+    for attempt in range(2):
+        src = img if k == 1.0 else cv2.resize(img, None, fx=k, fy=k, interpolation=cv2.INTER_AREA)
+        try:
+            res = ocr.readtext(src, detail=1, paragraph=False)
+            break
+        except Exception as e:  # torch.OutOfMemoryError
+            if "out of memory" not in str(e).lower() or attempt:
+                raise
+            try:
+                import torch
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+            print(f"[ocr] CUDA OOM at {src.shape[1]}x{src.shape[0]}, retrying at half size")
+            k *= 0.5
     out = []
-    for box, text, _conf in ocr.readtext(img, detail=1, paragraph=False):
-        xs = [p[0] for p in box]
-        ys = [p[1] for p in box]
+    for box, text, _conf in res:
+        xs = [p[0] / k for p in box]
+        ys = [p[1] / k for p in box]
         out.append((text.strip().lower(), (int(min(xs)) + x0, int(min(ys)) + y0,
                                            int(max(xs)) + x0, int(max(ys)) + y0)))
     return out
@@ -152,12 +173,28 @@ class CleanWaypoints(Skill):
         (d / f"{name}.json").write_text(json.dumps([[t, b] for t, b in boxes], indent=0))
         return frame, boxes
 
-    def _zoom_ocr(self, frame, cx, cy, half=260, scale=2.0):
-        """OCR a crop round (cx, cy), enlarged; boxes in full-frame pixels."""
+    def _waypoints_tab(self, frame, boxes, region):
+        """16 Nov: the datapad can open on its Data tab (vehicles). Click Waypoints, look again."""
+        x0, y0, x1, y1 = region
+        gx0 = x0 + int(0.225 * (x1 - x0))
+        k = frame.shape[0] / 1440
+        tab = next((b for t, b in boxes if t.startswith("waypoint") and b[1] < y0 + 70 * k and b[0] >= gx0 - 20 * k), None)
+        self.runner.keys.click(*(((tab[0] + tab[2]) // 2, (tab[1] + tab[3]) // 2) if tab
+                                 else (x0 + int(271 * k), y0 + int(38 * k))))
+        self.sleep(0.8)
+        return self._look("waypoints_tab")
+
+    def _zoom_ocr(self, frame, cx, cy, half=260, scale=2.0, rect=None):
+        """OCR a crop round (cx, cy) (or rect=(x0, y0, x1, y1)), enlarged; boxes in full-frame pixels."""
         import cv2
         h, w = frame.shape[:2]
-        x0, y0 = max(0, cx - half), max(0, cy - half)
-        x1, y1 = min(w, cx + half), min(h, cy + half)
+        if rect is not None:
+            x0, y0 = max(0, rect[0]), max(0, rect[1])
+            x1, y1 = min(w, rect[2]), min(h, rect[3])
+        else:
+            x0, y0 = max(0, cx - half), max(0, cy - half)
+            x1, y1 = min(w, cx + half), min(h, cy + half)
+        scale = min(scale, OCR_MAX_SIDE / max(1, x1 - x0, y1 - y0))
         crop = cv2.resize(frame[y0:y1, x0:x1], None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
         out = []
         for text, (a, b, c, d) in ocr_boxes(self._ocr(), crop):
@@ -207,12 +244,14 @@ class CleanWaypoints(Skill):
         self.sleep(1.5)
         deleted, skipped, tried = [], [], []
         try:
-            for _ in range(max_delete):
+            for i in range(max_delete):
                 frame, boxes = self._look("grid")
                 region = datapad_region(boxes, frame.shape)
                 if region is None:
                     self._anomaly("datapad_not_found", deleted=deleted)
                     return Result("failed", "datapad_not_found", {"deleted": deleted})
+                if i == 0:
+                    frame, boxes = self._waypoints_tab(frame, boxes, region)
                 labels = [lb for lb in waypoint_labels(boxes, region, prefixes, keep)
                           if norm(lb[0]) not in skipped]
                 if dry_run:

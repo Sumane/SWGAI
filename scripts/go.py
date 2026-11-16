@@ -1,6 +1,7 @@
 """
-Do one goal from wherever the character is, chaining the skills we have:
-clone if dead -> walk/drive to the ticket terminal -> buy -> board -> arrive.
+Do one goal from wherever the character is, chaining the skills we have.
+Every run starts with /find clear + clean_waypoints. Death is only checked when
+a step fails; if we're dead then, the clone is taken and the run stops.
 
     python scripts/go.py travel "Keren Starport"                    # from the nearest port we know
     python scripts/go.py travel "Keren Starport" --from "Theed Shuttle B"
@@ -64,6 +65,8 @@ def main():
     print("Switch to the game: starting in 5 s")
     time.sleep(5)
     try:
+        if a.goal != "recover":
+            chain.start()
         if a.goal == "travel":
             res = chain.travel(a.to, start=a.start)
         elif a.goal == "find":
