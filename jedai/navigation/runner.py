@@ -426,11 +426,31 @@ class NavigationRunner:
             return None
         self.rec.event("chat", lines=fresh)
         kind = classify(fresh)
+        if kind == "dead" and not self._clone_window_up(frame):
+            # 16 Nov: old "slain / clone activation" lines from earlier deaths were
+            # still in the chat window, re-read slightly differently, and the walk
+            # was stopped as "dead" with the character alive. Dead only counts when
+            # the CLONE ACTIVATED window is actually on screen.
+            self.rec.event("dead_false_alarm", lines=fresh[-4:], pos=self.player[::2])
+            print("\n[chat] 'slain' in chat but no clone window: old lines, carrying on")
+            kind = None
         if kind:
             self.rec.event(kind, frame=frame, lines=fresh[-4:], pos=self.player[::2])
             if kind != "dead":
                 print(f"\n⚔️  {kind}: {fresh[-1][:70]}")
         return kind
+
+    def _clone_window_up(self, frame) -> bool:
+        """Is the CLONE ACTIVATED window on screen? (one full-frame OCR pass; only on a suspected death)"""
+        try:
+            from ..harness.skills.datapad import ocr_boxes
+            from ..harness.skills.recover import clone_window
+            ocr = getattr(getattr(self.hud, "waypoint_reader", None), "ocr", None)
+            if ocr is None:
+                return True                       # can't check: believe the chat, as before
+            return clone_window(ocr_boxes(ocr, frame)) is not None
+        except Exception:
+            return True
 
     def chat_lines(self, frame=None) -> list[str]:
         """OCR the chat window (harness.screen_regions.chat)."""

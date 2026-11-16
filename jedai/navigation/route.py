@@ -39,8 +39,8 @@ def simplify(points, min_gap_m: float = 4.0):
 class RouteFollower:
     def __init__(self, read_position, keys, *, turn_rate_deg_s: float = 100.0, right_turn_sign: int = -1,
                  reach_m: float = 2.5, final_reach_m: float = 3.0, speed_m_s: float = 5.0,
-                 max_burst_s: float = 0.8, settle_s: float = 0.3, max_stuck: int = 10,
-                 timeout_s: float = 180.0, should_stop=lambda: False, on_event=None,
+                 max_burst_s: float = 1.4, settle_s: float = 0.3, max_stuck: int = 10,
+                 timeout_s: float | None = None, should_stop=lambda: False, on_event=None,
                  sleep=time.sleep, clock=time.time):
         self.read_position, self.keys = read_position, keys
         self.turn_rate, self.sign = float(turn_rate_deg_s), int(right_turn_sign)
@@ -62,9 +62,9 @@ class RouteFollower:
             self.sleep(0.2)
         return None
 
-    def _forward(self, secs):
+    def _forward(self, secs, p0=None):
         """Step forward; returns (before, after, metres moved)."""
-        p0 = self._pos()
+        p0 = p0 or self._pos()
         self.keys.tap("FORWARD", secs)
         self.sleep(self.settle)
         p1 = self._pos()
@@ -98,6 +98,10 @@ class RouteFollower:
         """('arrived' | 'stuck' | 'timeout' | 'stopped' | 'no_position', info)."""
         wps = [(float(x), float(z)) for x, z in waypoints]
         t0, stuck, i = self.clock(), 0, 0
+        # 16 Nov, Keren Starport: a fixed 120 s ran out two-thirds of the way
+        # along a 100 m walk that was going fine. Allow time by length.
+        length = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(wps, wps[1:]))
+        timeout = self.timeout if self.timeout is not None else max(120.0, 5.0 * length + 60.0)
         pos = self._pos()
         if pos is None:
             return "no_position", {}
@@ -107,7 +111,7 @@ class RouteFollower:
         while True:
             if self.should_stop():
                 return "stopped", self._info(i, wps)
-            if self.clock() - t0 > self.timeout:
+            if self.clock() - t0 > timeout:
                 return "timeout", self._info(i, wps)
             pos = self._pos()
             if pos is None:
@@ -141,13 +145,25 @@ class RouteFollower:
                 else:
                     stuck = 0
                 continue
-            dx, dz = wps[i][0] - pos[0], wps[i][1] - pos[1]
+            # Aim further ahead while the route runs straight: fewer, longer
+            # steps (each step costs about a second of reading the screen).
+            j = i
+            while j + 1 < len(wps) and math.hypot(wps[j + 1][0] - pos[0], wps[j + 1][1] - pos[1]) <= 14.0:
+                ax, az = wps[j + 1][0] - pos[0], wps[j + 1][1] - pos[1]
+                al = math.hypot(ax, az) or 1.0
+                # every point up to j+1 within 1.5 m of the straight line to it?
+                if all(abs((w[0] - pos[0]) * az - (w[1] - pos[1]) * ax) / al <= 1.5 for w in wps[i:j + 1]):
+                    j += 1
+                else:
+                    break
+            dx, dz = wps[j][0] - pos[0], wps[j][1] - pos[1]
+            d_aim = math.hypot(dx, dz)
             ang = math.degrees(math.atan2(self.heading[0] * dz - self.heading[1] * dx,
                                           self.heading[0] * dx + self.heading[1] * dz))
             if abs(ang) > 12:
                 self._turn(ang)
-            burst = max(0.25, min(self.max_burst, 0.8 * d / max(self.speed, 1.0)))
-            p0, p1, moved = self._forward(burst)
+            burst = max(0.25, min(self.max_burst, 0.8 * d_aim / max(self.speed, 1.0)))
+            p0, p1, moved = self._forward(burst, p0=pos)
             if moved >= 1.0:
                 stuck = 0
                 self.speed = 0.6 * self.speed + 0.4 * max(2.0, min(12.0, moved / burst))

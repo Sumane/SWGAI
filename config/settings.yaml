@@ -205,7 +205,6 @@ harness:
   chatlog_trust_s: 120         # a new harness process trusts a check younger than this
   recover_from_death: true     # on death: clone (pre-designated facility) and walk the recorded route out
   clone_load_wait_s: 60        # longest wait for the loading screen after cloning
-  clone_exit_timeout_s: 180    # give up walking out after this long (logged as an anomaly)
   shuttle_wait_s: 420          # travel_to: keep trying /boardShuttle this long (shuttles land every few minutes)
   clean_waypoints_every: 1                       # badge trips between datapad clean-ups; 0 = off
   verify_badges: true      # only count a badge when a new "badge" line shows in chat

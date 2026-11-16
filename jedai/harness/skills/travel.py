@@ -121,7 +121,7 @@ class TravelTo(Skill):
         f = RouteFollower(self.runner.read_position, self.runner.keys,
                           turn_rate_deg_s=float(c.get("turn_rate_deg_s", 100.0)),
                           right_turn_sign=int(c.get("right_turn_sign", -1)),
-                          reach_m=2.5, final_reach_m=3.0, timeout_s=120.0,
+                          reach_m=2.5, final_reach_m=3.0,
                           should_stop=self.runner.should_stop, sleep=self.sleep, clock=self.clock,
                           on_event=lambda kind, **kw: print(f"[travel] {kind} {kw}"))
         outcome, info = f.follow(points)

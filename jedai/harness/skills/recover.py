@@ -296,7 +296,6 @@ class RecoverFromDeath(Skill):
         follower = RouteFollower(self.runner.read_position, keys,
                                  turn_rate_deg_s=float(c.get("turn_rate_deg_s", 100.0)),
                                  right_turn_sign=int(c.get("right_turn_sign", -1)),
-                                 timeout_s=float(h.get("clone_exit_timeout_s", 180)),
                                  should_stop=self.runner.should_stop, sleep=self.sleep, clock=self.clock,
                                  on_event=self._route_event)
         outcome, info = follower.follow(route["waypoints"])

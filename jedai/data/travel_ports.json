@@ -1,11 +1,344 @@
 {
-  "_about": "Where to stand at each travel point, learned from recordings. 'terminal': a spot within 8 m of the ticket terminal (the server's limit for /purchaseTicket). 'board': a spot within 25 m of the shuttle/transport (the limit for /boardShuttle). 'to_board' / 'to_terminal': recorded walks (world x, z) for places where a straight line won't do (starport interiors). Points not listed here: the bot stands where it arrived and tries.",
-  "naboo": {
-    "Theed Shuttle B": {"terminal": [-4991, 4072], "board": [-4991, 4072], "recorded": "2026-11-16 shuttle capture"},
-    "The Lake Retreat": {"arrive": [-5495, -21], "terminal": [-5488, -30], "board": [-5488, -30], "recorded": "2026-11-16 shuttle capture"},
-    "Keren Starport": {"arrive": [1369, 2714], "terminal": [1404, 2759], "board": [1343, 2754],
-                       "to_terminal": null, "to_board": null, "indoor": true, "recorded": "2026-11-16 shuttle capture (walks not extracted yet)"},
-    "Theed Spaceport": {"arrive": [-4826, 4172], "terminal": [-4819, 4168], "board": [-4798, 4250],
-                        "to_board": null, "indoor": true, "recorded": "2026-11-16 shuttle capture (walk not extracted yet)"}
+ "_about": "Where to stand at each travel point, learned from recordings. 'terminal': a spot within 8 m of the ticket terminal (the server's limit for /purchaseTicket). 'board': a spot within 25 m of the shuttle/transport (the limit for /boardShuttle). 'to_board' / 'to_terminal': recorded walks (world x, z) for places where a straight line won't do (starport interiors). Points not listed here: the bot stands where it arrived and tries.",
+ "naboo": {
+  "Theed Shuttle B": {
+   "terminal": [
+    -4991,
+    4072
+   ],
+   "board": [
+    -4991,
+    4072
+   ],
+   "recorded": "2026-11-16 shuttle capture",
+   "verified": "2026-11-16: bot bought and boarded here (to Keren Starport)"
+  },
+  "The Lake Retreat": {
+   "arrive": [
+    -5495,
+    -21
+   ],
+   "terminal": [
+    -5488,
+    -30
+   ],
+   "board": [
+    -5488,
+    -30
+   ],
+   "recorded": "2026-11-16 shuttle capture"
+  },
+  "Keren Starport": {
+   "arrive": [
+    1373,
+    2750
+   ],
+   "terminal": [
+    1406,
+    2759
+   ],
+   "board": [
+    1343,
+    2754
+   ],
+   "to_terminal": [
+    [
+     1367,
+     2748
+    ],
+    [
+     1363,
+     2743
+    ],
+    [
+     1363,
+     2737
+    ],
+    [
+     1363,
+     2732
+    ],
+    [
+     1363,
+     2726
+    ],
+    [
+     1364,
+     2721
+    ],
+    [
+     1366,
+     2715
+    ],
+    [
+     1371,
+     2713
+    ],
+    [
+     1376,
+     2715
+    ],
+    [
+     1381,
+     2717
+    ],
+    [
+     1386,
+     2719
+    ],
+    [
+     1391,
+     2722
+    ],
+    [
+     1396,
+     2725
+    ],
+    [
+     1400,
+     2729
+    ],
+    [
+     1404,
+     2732
+    ],
+    [
+     1409,
+     2735
+    ],
+    [
+     1413,
+     2739
+    ],
+    [
+     1414,
+     2745
+    ],
+    [
+     1414,
+     2750
+    ],
+    [
+     1416,
+     2756
+    ],
+    [
+     1410,
+     2758
+    ]
+   ],
+   "to_board": [
+    [
+     1410,
+     2755
+    ],
+    [
+     1413,
+     2750
+    ],
+    [
+     1415,
+     2745
+    ],
+    [
+     1413,
+     2739
+    ],
+    [
+     1409,
+     2736
+    ],
+    [
+     1405,
+     2732
+    ],
+    [
+     1400,
+     2729
+    ],
+    [
+     1396,
+     2726
+    ],
+    [
+     1391,
+     2723
+    ],
+    [
+     1386,
+     2720
+    ],
+    [
+     1383,
+     2718
+    ],
+    [
+     1378,
+     2716
+    ],
+    [
+     1373,
+     2713
+    ],
+    [
+     1368,
+     2714
+    ],
+    [
+     1364,
+     2718
+    ],
+    [
+     1361,
+     2722
+    ],
+    [
+     1358,
+     2727
+    ],
+    [
+     1355,
+     2732
+    ],
+    [
+     1352,
+     2737
+    ],
+    [
+     1350,
+     2742
+    ],
+    [
+     1347,
+     2747
+    ],
+    [
+     1344,
+     2752
+    ]
+   ],
+   "indoor": true,
+   "recorded": "2026-11-16 shuttle capture, frames 185-339 (track.json)"
+  },
+  "Theed Spaceport": {
+   "arrive": [
+    -4857,
+    4165
+   ],
+   "terminal": [
+    -4820,
+    4168
+   ],
+   "board": [
+    -4798,
+    4250
+   ],
+   "to_board": [
+    [
+     -4817,
+     4166
+    ],
+    [
+     -4812,
+     4164
+    ],
+    [
+     -4807,
+     4167
+    ],
+    [
+     -4804,
+     4171
+    ],
+    [
+     -4804,
+     4176
+    ],
+    [
+     -4807,
+     4181
+    ],
+    [
+     -4811,
+     4185
+    ],
+    [
+     -4813,
+     4190
+    ],
+    [
+     -4812,
+     4196
+    ],
+    [
+     -4810,
+     4201
+    ],
+    [
+     -4809,
+     4207
+    ],
+    [
+     -4807,
+     4212
+    ],
+    [
+     -4806,
+     4217
+    ],
+    [
+     -4805,
+     4223
+    ],
+    [
+     -4803,
+     4228
+    ],
+    [
+     -4802,
+     4233
+    ],
+    [
+     -4800,
+     4239
+    ],
+    [
+     -4799,
+     4244
+    ]
+   ],
+   "indoor": true,
+   "recorded": "2026-11-16 shuttle capture, frames 341-425 (track.json)",
+   "to_terminal": [
+    [
+     -4853,
+     4169
+    ],
+    [
+     -4850,
+     4173
+    ],
+    [
+     -4846,
+     4177
+    ],
+    [
+     -4840,
+     4179
+    ],
+    [
+     -4835,
+     4177
+    ],
+    [
+     -4830,
+     4174
+    ],
+    [
+     -4826,
+     4172
+    ]
+   ]
   }
+ }
 }

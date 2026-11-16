@@ -222,6 +222,9 @@ class CleanWaypoints(Skill):
                 if not labels:
                     break
                 label, (ix, iy) = labels[0]
+                # how many icons carry this name now (16 Nov: two "route_theed_shuttle_b",
+                # both read as "route": deleting one was reported as a failure)
+                n_before = sum(1 for t, _ in labels if norm(t) == norm(label))
                 if norm(label) in tried:
                     # it said deleted but here it is again: don't go round
                     self._anomaly("label_came_back", label=label)
@@ -235,13 +238,26 @@ class CleanWaypoints(Skill):
                 # The radial labels are small and sit next to icons: read a
                 # 2x-enlarged crop round the click. 7 Nov: the full-frame OCR
                 # read 1-3 but missed '4) Destroy' next to its tick icon.
-                destroy = find_text(self._zoom_ocr(frame, ix, iy), "destroy", "4)")
+                # 16 Nov: the box it found for "Destroy" was up by the icon's own
+                # label, so the click missed and no confirm box came. Only accept
+                # a "destroy" that sits where option 4 does (below-right of the
+                # icon); otherwise click option 4's usual spot, which has matched
+                # the screenshots every time (+77..88, +56..61 px at 2560x1440).
+                sx, sy = frame.shape[1] / 2560, frame.shape[0] / 1440
+                zoom = self._zoom_ocr(frame, ix, iy)
+                import json as _json
+                (self._dir() / f"{self._step:02d}_radial_zoom.json").write_text(_json.dumps([[t, b] for t, b in zoom]))
+                destroy = None
+                for t, b in zoom:
+                    cx, cy = (b[0] + b[2]) / 2, (b[1] + b[3]) / 2
+                    if ("destr" in t or "estroy" in t) and 25 * sx < cx - ix < 170 * sx and 20 * sy < cy - iy < 120 * sy:
+                        destroy = b
+                        break
                 if destroy is not None:
                     keys.click((destroy[0] + destroy[2]) // 2, (destroy[1] + destroy[3]) // 2)
                 else:
-                    # fall back: Destroy is option 4, bottom-right of the ring
                     print(f"[datapad] 'Destroy' not read for {label}: clicking option 4's spot")
-                    keys.click(ix + int(88 * frame.shape[1] / 2560), iy + int(56 * frame.shape[0] / 1440))
+                    keys.click(ix + int(82 * sx), iy + int(58 * sy))
                 # the box can take a moment (7 Nov: not there after 0.8 s)
                 for _wait in range(4):
                     self.sleep(0.8)
@@ -271,15 +287,17 @@ class CleanWaypoints(Skill):
                     skipped.append(norm(label))
                     break
                 region = datapad_region(boxes, frame.shape)
-                still = region is not None and any(
-                    norm(t) == norm(label) for t, _ in waypoint_labels(boxes, region, prefixes, keep))
-                if still:
+                n_after = 0 if region is None else sum(
+                    1 for t, _ in waypoint_labels(boxes, region, prefixes, keep) if norm(t) == norm(label))
+                if n_after >= n_before:
                     print(f"[datapad] {label} still listed after Yes: skipping it")
                     self._anomaly("still_listed", label=label)
                     skipped.append(norm(label))
                     continue
-                print(f"[datapad] deleted {label}")
+                print(f"[datapad] deleted {label}" + (f" ({n_after} more with that name)" if n_after else ""))
                 deleted.append(label)
+                if n_after:
+                    tried.remove(norm(label))        # same name, another icon: go again
         except Exception as e:
             self._anomaly("exception", error=f"{type(e).__name__}: {e}")
             self._escape()

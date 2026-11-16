@@ -56,7 +56,9 @@ class NavigateTo(Skill):
         return [ln for ln in self.runner.chat_since(baseline) if "badge" in ln]
 
     def run(self, state: WorldState, x: float, z: float, label: str, radius: float | None = None,
-            **_) -> Result:
+            stop: float | None = None, **_) -> Result:
+        """radius: a badge area (arrival is confirmed from chat). stop: just get within this many
+        metres (a terminal, a doorway), walking the last part."""
         h = self.settings.raw["harness"]
         badge = bool(radius)
         verify = badge and h.get("verify_badges", True)
@@ -65,6 +67,9 @@ class NavigateTo(Skill):
         self.sleep(float(h.get("waypoint_settle_s", 1.5)))
         outcome, d = self._drive(state, x, z, label)
         data = {"outcome": outcome}
+        if outcome == "arrived" and stop and not badge and d is not None and d > stop:
+            outcome, d = self._walk_in(state, x, z, label, stop)
+            data["outcome"] = outcome
         if outcome == "arrived" and badge:
             # a vehicle stops ~50 m out; badges need you inside a ~10 m circle
             if d is not None and d > radius:

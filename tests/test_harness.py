@@ -952,10 +952,7 @@ def test_travel_dry_run_unknown_and_failures(tmp_path, monkeypatch):
     res = run(WorldState(":memory:"), "The Lake Retreat")
     assert res.reason == "purchase_failed" and "/boardShuttle" not in world.typed
     assert (tmp_path / "data" / "live" / "anomalies" / "index.jsonl").exists()
-    # a starport whose indoor walk isn't recorded yet: buys nothing blind, says what's missing
-    run, world, _ = _travel_rig(tmp_path, monkeypatch, start=(1369, 2714))
-    res = run(WorldState(":memory:"), "Theed Spaceport")
-    assert res.reason == "terminal_too_far" and not world.typed
+
 
 
 def test_route_follower_finds_the_way_out_of_a_tube():
@@ -998,3 +995,79 @@ def test_clone_window_16_nov_real_read_and_stuck_window(tmp_path, monkeypatch):
     res = skill.run(WorldState(":memory:"))
     assert res.reason == "clone_window_wont_close" and not any(t[0] == "FORWARD" for t in world.taps)
     assert sum(1 for t in world.taps if t == ("CLICK", 684, 557)) == 3
+
+
+# --- chains (16 Nov) ---------------------------------------------------------------
+
+def _chain_rig(tmp_path, pos, dead=False, fail=None):
+    from jedai.harness.chain import Chain
+    from jedai.harness.skill import SkillRegistry
+    calls, where = [], {"p": pos}
+
+    def mk(name, effect=None):
+        class S(Skill):
+            def run(self, state, **args):
+                calls.append((name, args))
+                if effect:
+                    effect(args)
+                return Result("failed", "boom") if fail == name else Result("ok")
+            def is_dead(self): return dead
+        S.name = name
+        return S()
+    reg = SkillRegistry()
+    reg.register(mk("recover_from_death", lambda a: where.__setitem__("p", (-4892, 4045))))
+    reg.register(mk("navigate_to", lambda a: where.__setitem__("p", (a["x"] + 2, a["z"]))))
+    for n in ("mount", "travel_to", "clean_waypoints"):
+        reg.register(mk(n))
+    s = WorldState(":memory:")
+    chain = Chain(reg, s, SkillLog(tmp_path / "logs"), FakeSettings(), lambda: where["p"], say=lambda m: None)
+    return chain, calls, s
+
+
+def test_chain_travel_strings_recover_navigate_buy_and_clean(tmp_path):
+    chain, calls, s = _chain_rig(tmp_path, pos=(-4902, 3911), dead=True)
+    res = chain.travel("keren starport")
+    assert res.ok
+    assert [c[0] for c in calls] == ["recover_from_death", "navigate_to", "travel_to", "clean_waypoints"]
+    nav = calls[1][1]
+    assert (nav["x"], nav["z"], nav["stop"]) == (-4991, 4072, 5.0) and nav["label"] == "route_theed_shuttle_b"
+    assert calls[2][1] == {"to": "Keren Starport"} and s.get("dead") is False
+
+
+def test_chain_skips_what_isnt_needed_and_stops_at_a_failure(tmp_path):
+    chain, calls, _ = _chain_rig(tmp_path, pos=(-4990, 4073))             # alive, at the terminal already
+    assert chain.travel("The Lake Retreat").ok
+    assert [c[0] for c in calls] == ["travel_to", "clean_waypoints"]
+    chain, calls, _ = _chain_rig(tmp_path, pos=(-5400, 4300), fail="navigate_to")   # far: mount, then the drive fails
+    res = chain.travel("Keren Starport", start="Theed Shuttle B")
+    assert not res.ok and [c[0] for c in calls] == ["mount", "navigate_to"]
+    assert chain.travel("Nowhere").reason == "unknown_destination"
+
+
+def test_old_slain_lines_in_chat_are_not_a_death(monkeypatch):
+    """16 Nov: stale death lines re-read from the chat window stopped a walk with the character alive."""
+    from jedai.navigation import runner as rmod
+    r = rmod.NavigationRunner.__new__(rmod.NavigationRunner)
+    r.cfg = {"chat_watch_s": 0.001}
+    r._chat_t, r._chat_base, r.player = 0.0, ["hello there"], (1, 0, 2)
+    r.rec = type("R", (), {"event": lambda self, *a, **k: None})()
+    r.chat_lines = lambda frame=None: ["hello there", "you were slain by a nuna. requesting clone activation"]
+    r._clone_window_up = lambda frame: False
+    assert r._chat_watch(None) is None
+    r._chat_base = ["hello there"]
+    r._chat_t = 0.0
+    r._clone_window_up = lambda frame: True
+    assert r._chat_watch(None) == "dead"
+
+
+def test_travel_from_inside_keren_starport_uses_the_recorded_walks(tmp_path, monkeypatch):
+    run, world, _ = _travel_rig(tmp_path, monkeypatch, start=(1373, 2748))      # where the bot arrived on 16 Nov
+    s = WorldState(":memory:")
+    res = run(s, "Theed Spaceport")
+    assert res.ok, res
+    i_buy = world.typed.index("/purchaseTicket naboo Keren_Starport naboo Theed_Spaceport single")
+    assert world.typed[i_buy + 1] == "/boardShuttle"
+    assert s.get("travel_point") == "Theed Spaceport"
+    # the chain doesn't send the outdoor navigator into the building
+    chain, calls, _ = _chain_rig(tmp_path, pos=(1373, 2748))
+    assert chain.travel("Theed Spaceport").ok and [c[0] for c in calls] == ["travel_to", "clean_waypoints"]

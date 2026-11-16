@@ -76,6 +76,14 @@ Working in-game:
 - Harness: badge collector, world state, skill log, auto-restart on code change.
 - Delete the bot's waypoints through the datapad (Ctrl+D), verified once in-game.
 
+Verified in-game 16 Nov:
+- `recover_from_death` at Theed: cloned, left the tube, walked to the street.
+- `travel_to`: typed `/purchaseTicket` and `/boardShuttle` work. Theed Shuttle B -> Keren Starport.
+- `python scripts/go.py travel "<port>"` chains recover -> navigate -> travel -> clean
+  from wherever the character is (jedai/harness/chain.py). Marc wants tests run
+  through chains like this, not by walking the character into place.
+- A death only counts with the CLONE ACTIVATED window on screen (old chat lines gave a false alarm).
+
 Written but NOT yet verified in-game:
 - `travel_to` skill (16 Nov): `/purchaseTicket <planet> <From> <planet> <To> single`
   within 8 m of a ticket terminal, then `/boardShuttle` within 25 m of the
