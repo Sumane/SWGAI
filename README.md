@@ -21,7 +21,11 @@ At this point I cant decide on how to best proceed and feel that the only way to
 
 # 2026 Update: nine years later
 
-*The text above is the original 2017 plan, left exactly as written. Everything below was added in October 2026.*
+*The text above is the original 2017 plan, left exactly as written. Everything below was added in October 2026 and last updated on 17 November 2026.*
+
+**Latest milestone (17 Nov 2026): the first complete delivery mission, unattended.** The bot
+cleaned up its datapad, found Theed's mission terminal, took a delivery, rode to the pickup
+NPC, talked to him, rode to the destination NPC and collected the reward.
 
 The project went dormant after that README, then was rebuilt from scratch in 2026 as **JedAI**: an agent that plays SWGEmu using only what a human player has (the rendered screen, the chat window and the combat log). No database access, no packet sniffing, no memory reading.
 
@@ -31,7 +35,7 @@ The project went dormant after that README, then was rebuilt from scratch in 202
 |---|---|
 | **1. Making sense of its environment** (YOLO on the game display) | Built, and the 2017 instinct was right. Eight YOLO detectors (YOLOv8n/s and YOLO11n) read the HUD: waypoint group, panel and components, waypoint arrow, distance digits, minimap, coordinate field and coordinate digits. All score 0.99+ mAP50 (table below). EasyOCR reads waypoint names. The unglamorous part was building the training data: capture, frame extraction, clustering, auto-labelling. |
 | **2. Path finding** | Built, and it became the bulk of the work. The navigator went through many versions (header v0.02 to v0.20) and three architectures: speed-based obstacle handling, then wall-hugging with "frustration" exploration, then a D* Lite planner over a persistent SQLite grid map. **v1.0 (Oct 2026): the bot reaches its waypoint, cities included** (Theed, 302 m in 193 s). The "imagination" problem from 2017 is real, and is what the vision work in 1.1+ is for. |
-| **3. Interacting with the environment** (combat and skill trees) | Not built yet. It's designed as a council of specialist agents (below) rather than one learning process. |
+| **3. Interacting with the environment** (combat and skill trees) | Partly built (Nov 2026): terminals, mission windows, the datapad, shuttles and starports, talking to NPCs, death recovery. Combat and skill trees are not built yet; they come last, with the LLMs. |
 | **4. Enhancing current levels of skill** ("revisit at that point") | Revisited. This became a five-tier completion target and a plan for the bot to commission its own tools. |
 
 The biggest change in approach: the 2017 plan assumed one machine-learning algorithm learning everything. In 2026 the plan is **perception models for seeing, classic algorithms for moving, and local LLMs for deciding**.
@@ -42,17 +46,26 @@ The biggest change in approach: the 2017 plan assumed one machine-learning algor
 config/settings.yaml   one file for paths, monitor, planet, keys and tuning
                        (put your own values in config/settings.local.yaml)
 jedai/                 the bot
-  perception/          screen capture + HUD reading (the 8 YOLO models, OCR)
+  perception/          screen capture + HUD reading (the 8 YOLO models, OCR, chat)
   control/             command channel, key client, master controller
-  navigation/          navigator, D* Lite planner, SQLite grid map, target
-                       trilateration, reading filters, run recorder, navmesh reader
-scripts/               run_controller.py, run_navigator.py, review_run.py, build_navmesh_priors.py,
-                       depth_check.py, calibrate_speed.py, check_turn_direction.py
+  navigation/          navigator, D* Lite planner, SQLite grid map, target trilateration,
+                       reading filters, run recorder, navmesh (flat priors and level-aware
+                       routing), route follower, compass
+  harness/             world state, skill interface, skill log, chains (chain.py)
+    skills/            navigate_to, follow_waypoint, close_in, level_route, mount/dismount,
+                       find_nearest, take_mission, mission_npc, abort_missions,
+                       clean_waypoints, travel_to, recover_from_death
+  data/                badges and travel points, recorded routes, terminals, learned places
+scripts/               go.py (all chains), linux/1_game.sh 2_controller.sh 3_deliver.sh,
+                       level_route.py, capture_session.py, route_from_capture.py,
+                       review_run.py, build_navmesh_priors.py, calibrate_speed.py, ...
 tools/                 capture -> crop -> auto-label -> train (see tools/README.md)
 models/                training records for each model; weights go here (not in git)
-tests/                 offline tests, including a simulated drive
+tests/                 offline tests, including simulated drives (~190)
 archive/navigation/    every earlier navigator version, untouched
-docs/                  ROADMAP.md, reorganisation notes, September 2026 status review
+docs/                  OBJECTIVES.md (project map to Jedi), CAPABILITIES.md (what the bot
+                       can do, how to choose between skills, a plan per process),
+                       HANDOFF.md (current state), ROADMAP.md, REORGANISATION.md
 ```
 
 The code was reorganised in October 2026 from two messy drive folders. The
@@ -83,6 +96,25 @@ These are detector scores, not proof that the bot navigates. They haven't been c
 4. Correct those by hand.
 5. Do a **full retrain** rather than a fine-tune, to avoid catastrophic forgetting.
 6. Repeat.
+
+## The harness (November 2026)
+
+Everything the bot does is a **skill**: one job from start to finish with its own
+recovery, returning `ok`, `failed(reason)` or `stuck` plus data. Skills are strung
+together by **chains** (`jedai/harness/chain.py`, run with `scripts/go.py`): `travel`,
+`goto`, `recover`, `find`, `mission`, `deliver`, `abort`. The layers, the choice of
+movement method (raw keys, close-in, navigator, bike, shuttle, starport) and a plan for
+every process are in [docs/CAPABILITIES.md](docs/CAPABILITIES.md); the path to Jedi is in
+[docs/OBJECTIVES.md](docs/OBJECTIVES.md).
+
+Verified in-game: death recovery and cloning-facility exit, shuttle travel between
+Naboo ports, `/find` and terminal location, the mission terminal (list, details, accept),
+abort and waypoint clean-up in the datapad, navigation to NPCs, talking to them, and a
+full delivery mission.
+
+Failures are data: anything unexpected is logged with screenshots in
+`data/live/anomalies/`, and what the scripts can't fix is left as an escalation in
+`data/live/escalations/` for the local 27B model (not built yet).
 
 ## Navigation: what works and what doesn't
 
@@ -130,6 +162,14 @@ If the bot gets stuck twice in the same place while mounted, it dismounts and
 carries on on foot, confirming blocked cells for D* to plan around. Details are
 in [docs/REORGANISATION.md](docs/REORGANISATION.md).
 
+**November 2026.** The navmesh from Core3 became the base map, so the bot plans round
+buildings it has never bumped. Cells are 2 m; one bump blocks a cell, and repeated
+failures in one place make the whole area dearer each time, so D\* routes out on its own
+instead of looping. The last metres are a separate skill (`close_in`, first-person view,
+since the waypoint arrow is relative to the camera), NPCs are reached with `/follow`, and
+a target on another level (a terrace) is reached by routing over the navmesh's own
+polygons, which keep their heights. The bot gets off the bike within 50 m of a close stop.
+
 **What fixed it (summary).** A code review of the old D\* Lite version found seven bugs (alignment condition that could never be met, wrong CLEAR marking, cache miss, an unexplored-cell cost causing backward routing, a malformed f-string, an unnormalised cross product, node loss). All were fixed in place rather than replacing D\* with A\*, together with:
 - trilateration of the target from waypoint-distance readings (`jedai/navigation/target_estimator.py`)
 - an admissible D\* heuristic and a 300 m "carrot" goal
@@ -151,7 +191,16 @@ Fully complete SWGEmu, in tiers:
 | T4 | Mastery | All 32 professions, Jedi Master, all badges, space |
 | T5 | Transcendence | Open-ended self-improvement loop |
 
-Current status: **T1, navigation v1.0 done; 1.1 (navmesh map + vision) in progress.** The step-by-step plan to Jedi is in [docs/ROADMAP.md](docs/ROADMAP.md).
+Current status: **T1. Navigation, travel, death recovery and delivery missions work;
+next are a credits loop, the decision-model interface and the first exploration badges.**
+The objective tree to Jedi (glowing: exploration, profession and content badges; the
+Village of Aurilia; the Jedi grind) is in [docs/OBJECTIVES.md](docs/OBJECTIVES.md), and the
+versions and systems in [docs/ROADMAP.md](docs/ROADMAP.md).
+
+The three systems being built: **skills and chains** (System 1, mostly built), a **small
+decision model** that picks the next skill (System 2, not built; the chains' rules stand in
+for it), and a **local 27B model** on llama-server for long-horizon planning and fixing
+escalations (System 3, not built).
 
 ### Target architecture (mostly design)
 
@@ -174,26 +223,27 @@ Perception ──► Council ──► Orchestrator + SanityCheck ──► Acti
 
 ## Running it
 
-This hasn't been run in-game since the reorganisation, so supervise the first runs.
-The code targets **Windows** with the game visible.
+Runs on **Linux** (Ubuntu, game under Wine/DXVK on its own X display `:2`), with a Python
+venv at `~/venvs/jedai`. The game and the bot share the GPUs with the local LLM, so video
+memory is tight: close other GPU-heavy apps if the game lags.
 
-1. Install PyTorch with CUDA (`tools/install_cuda_torch.bat`), then run `pip install -r requirements.txt`.
-2. Copy `config/settings.local.example.yaml` to `config/settings.local.yaml`. Set `paths.data_dir`, and `paths.nav_db` if you want to keep an existing map.
+1. `pip install -r requirements.txt` in the venv (PyTorch with CUDA first).
+2. Copy `config/settings.local.example.yaml` to `config/settings.local.yaml`. Set
+   `paths.data_dir`, and `paths.nav_db` if you want to keep an existing map.
 3. Put the weights in `models/<name>/weights/best.pt`, or point `paths.models_dir` at them.
-4. Once, with the controller running, run `python scripts/check_turn_direction.py`. Set `navigation.right_turn_sign` to the value it prints.
-5. Run each of these in its own terminal:
+4. Three terminals, in order:
 
 ```
-python scripts/run_controller.py
-python scripts/run_navigator.py
+bash scripts/linux/1_game.sh        # start the game, log in
+bash scripts/linux/2_controller.sh  # key controller; F8 stops everything
+bash scripts/linux/3_deliver.sh     # one delivery mission (python scripts/go.py deliver)
 ```
 
-The navigator asks for a vehicle, scans your waypoints and asks you to pick
-one. Switch focus back to the game during the countdown. **F8** stops both.
+Other chains: `python scripts/go.py travel "Keren Starport"`, `goto <x> <z>`, `recover`,
+`find mission`, `mission --dry-run`, `abort`. Restart the controller after changing keys
+in the settings.
 
-To calibrate a vehicle's speed: `python scripts/calibrate_speed.py --mode swoop --save`.
-
-**Tests (no game needed):** `python -m pytest tests`
+**Tests (no game needed):** `python -m pytest -q tests`
 
 ## Disclaimer
 

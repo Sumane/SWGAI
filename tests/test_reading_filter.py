@@ -86,3 +86,15 @@ def test_distance_gate_settles_on_a_bad_starting_value():
         c.t += 1
         out = g.check(887, (0, 0))
     assert out == 887
+
+
+def test_gate_seeded_from_the_list_rejects_a_misread_one():
+    """17 Nov: the list said 48 m; the first tick read "1" and was taken as arrival 40 m short."""
+    from jedai.navigation.reading_filter import DistanceGate
+    from jedai.perception.text import repair_extra_digit
+    g = DistanceGate(clock=lambda: 0.0)
+    g.reset(48)
+    assert g.check(1, (-4870.0, 4186.0)) is None                 # moved ~2 m: 48 -> 1 is impossible
+    g.last_pos = (-4868.0, 4185.0)
+    raw = repair_extra_digit(40, g.last, g.allowed((-4876.0, 4191.0)))
+    assert raw == 40 and g.check(raw, (-4876.0, 4191.0)) == 40     # the true 40 after 10 m walked

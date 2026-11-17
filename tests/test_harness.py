@@ -1946,7 +1946,8 @@ def test_chain_falls_back_to_dstar_when_something_blocks_the_npc(tmp_path):
         chain.registry.register(k)
     res = chain._mission_leg("important policy speech", {}, "destination", 1500.0)
     assert res.ok, res
-    assert [c[0] for c in calls] == ["follow_waypoint", "close_in", "mission_npc", "level_route", "navigate_to", "mission_npc"]
+    assert [c[0] for c in calls if c[0] != "clean_waypoints"] == ["follow_waypoint", "close_in", "mission_npc", "level_route", "navigate_to", "mission_npc"]
+    assert [c[0] for c in calls].index("clean_waypoints") == 5        # route_npc deleted before the talk
     nav = calls[4][1]
     assert (nav["x"], nav["z"], nav["stop"]) == (-5620.0, 4710.0, 3.0)
 
@@ -1973,3 +1974,28 @@ def test_start_aborts_a_leftover_mission_before_cleaning_waypoints(tmp_path):
     calls.clear(); panel["rows"] = [("Blaster Schematics", 120)]
     assert chain.start() is None
     assert [c[0] for c in calls] == ["clean_waypoints", "abort_missions"] and calls[1][1]["titles"] == ["Blaster Schematics"]
+
+
+def test_details_accept_button_is_found_in_a_taller_window():
+    """17 Nov: the details window opened taller than recorded; the fixed offset put the click
+    150 px above the real Accept, which was read but ignored. OCR from that run."""
+    from jedai.harness.skills.mission import detail_window
+    boxes = [("item:", (158, 283, 191, 297)), ("start:", (157, 353, 192, 367)),
+             ("destination:", (158, 424, 224, 437)), ("reward:", (157, 564, 204, 576)),
+             ("close_", (310, 1062, 336, 1070)), ("accept", (1205, 1061, 1243, 1073)),
+             ("accept mission", (745, 1217, 821, 1229))]
+    d = detail_window(boxes, 1440)
+    assert d["accept"] == (1224, 1067) and d["close"] == (323, 1066)
+
+
+def test_outcome_sees_a_pickup_without_the_word_to_or_a_first_distance():
+    """17 Nov: picked up on the first talk, missed: chat read "says sumane larif" (no "to"),
+    no distance before the talk, 92 m after."""
+    from jedai.harness.skills import deliver as dl
+    npc = dl.MissionNpc.__new__(dl.MissionNpc)
+    npc.runner = type("R", (), {"chat_since": lambda self, m: ['"this speech needs to be delivered...", bine enane says sumane larif.']})()
+    npc.panel_dist = lambda title, reads=3: 92
+    assert npc._outcome("important policy speech", None, 0)["result"] == "picked_up"
+    npc.runner = type("R", (), {"chat_since": lambda self, m: ['"why are you still here? go deliver that item"']})()
+    npc.panel_dist = lambda title, reads=3: None
+    assert npc._outcome("important policy speech", None, 0)["result"] == "picked_up"

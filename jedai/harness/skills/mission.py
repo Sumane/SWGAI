@@ -182,9 +182,13 @@ def detail_window(boxes, frame_h: int = 1440):
     out = {"fields": fields, "anchor": dest,
            "close": (dest[0] + int(160 * k), dest[1] + int(492 * k)),
            "accept": (dest[0] + int(1037 * k), dest[1] + int(492 * k))}
+    # 17 Nov: the window opened taller than in the recording, the buttons were 643 px under
+    # "Destination:" not 492, and the read "Accept" (y 1061) fell outside the band looked in, so
+    # it clicked empty window. The buttons' own text wins, anywhere below the labels; the fixed
+    # offset is only for when they aren't read.
     for t, b in boxes:
-        s = t.strip(" .")
-        if dest[1] + 380 * k < b[1] < dest[1] + 600 * k and dest[0] - 20 * k < b[0] < dest[0] + 1250 * k:
+        s = t.strip(" ._-|").lower()
+        if dest[1] + 300 * k < b[1] < dest[1] + 900 * k and dest[0] - 20 * k < b[0] < dest[0] + 1250 * k:
             if s == "accept":
                 out["accept"] = _centre(b)
             elif s == "close":
@@ -407,6 +411,21 @@ class TakeMission(Skill):
         # answered, so nothing was taken. Marc's recording: OK ~70 px right of the question's middle.
         frame, boxes = self._look("confirm")
         ask = find_text(boxes, "are you sure", "accept this mission", "want to accept")
+        for again in range(2):
+            if ask is not None:
+                break
+            # 17 Nov: no question = the click missed. Look for the button itself and try again
+            # (the details window's "Accept", not the list's "Accept Mission").
+            btn = [b for t, b in boxes if t.strip(" ._-|").lower() == "accept"]
+            if btn:
+                keys.click(*_centre(max(btn, key=lambda b: b[1])))
+            elif detail and detail.get("accept"):
+                keys.click(*detail["accept"])
+            else:
+                keys.click(*win["buttons"]["accept"])
+            self.sleep(1.0)
+            frame, boxes = self._look(f"confirm_again{again}")
+            ask = find_text(boxes, "are you sure", "accept this mission", "want to accept")
         if ask is None:
             return self._fail("no_accept_confirm", mission=mission)
         from .datapad import confirm_ok_xy

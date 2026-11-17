@@ -677,7 +677,7 @@ class NavigationRunner:
                 if wp["name"] == name:
                     return wp
             for wp in waypoints:
-                if name.lower() in wp["name"].lower():
+                if name.lower() in (wp["name"] or "").lower():      # a row whose name wasn't read is None
                     return wp
             print(f"Waypoint '{name}' not found in {[w['name'] for w in waypoints]}")
             return None
@@ -731,7 +731,12 @@ class NavigationRunner:
         self._approaching = False
         self._approach_best, self._approach_t, self._approach_off_until = 1e9, 0.0, 0.0
         self.min_dist_seen = self.last_valid_dist = target["distance"]
-        self.dist_gate.reset()        # the list's reading may itself be a misread
+        # 17 Nov: the waypoint was 48 m away (the list said so, the screenshot shows "48m"), but
+        # the gate started empty, the first tick read "1", and from then on the true "40" was
+        # "repaired" to 0 and "1 m" was arrival: the bot stopped against a wall 40 m short and
+        # close_in shuffled along it. Start the gate from the list's reading. It is still settling
+        # (a few readings), so if the list itself was the misread, steady readings still win.
+        self.dist_gate.reset(target["distance"] if target.get("distance") else None)
         self.close_read_count = 0
 
         run_id = self.db.start_run(self.planet, self.player[0] or 0, self.player[2] or 0, 0, 0)

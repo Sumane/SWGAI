@@ -404,7 +404,7 @@ class Chain:
             res = self.step("close_in", f"the last metres to '{title}' ({leg})", title=title, stop_m=5.0)
             if res.ok:
                 break
-            if res.reason != "blocked" or attempt:
+            if res.reason not in ("blocked", "too_far") or attempt:
                 return res
         res = self.step("mission_npc", f"talk to the {leg} NPC", title=title)
         if res.ok or res.reason != "npc_not_talked" or target is None:
@@ -427,6 +427,8 @@ class Chain:
                        f"({target[0]:.0f}, {target[1]:.0f})", x=target[0], z=target[1], label="route_npc", stop=3.0)
         if not nv.ok:
             return nv
+        # 17 Nov: route_npc stayed on the panel and was taken for the mission's next row
+        self.clean_waypoints("delete the route_npc waypoint")
         return self.step("mission_npc", f"talk to the {leg} NPC again, after D*", title=title)
 
     _COMPASS = {"n": (0, 1), "ne": (0.7071, 0.7071), "e": (1, 0), "se": (0.7071, -0.7071),

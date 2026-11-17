@@ -43,15 +43,24 @@ class MissionNpc(FindNearest):
     def panel_dist(self, title: str, reads: int = 3):
         """Distance on the mission's waypoint row: int, None (row there, distance not read)
         or "gone" (no row with that title)."""
-        seen, wps = False, []
+        seen, wps, vals = False, [], []
         for i in range(reads):
             wps = self._hud_waypoints()
             for n, d in wps:
                 if title_match(n, title) or (not self._ours(n) and sum(not self._ours(x) for x, _ in wps) == 1):   # the only row that isn't ours is the mission's (see _row)
                     seen = True
                     if d is not None:
-                        return d
+                        vals.append(d)
+            if len(vals) >= 2 and vals[-1] == vals[-2]:
+                break                                    # the same twice: that's it
             self.sleep(0.5)
+        if vals:
+            # 17 Nov: "destination waypoint 1 m" right after the pickup: the panel showed 92 m;
+            # one read came out "1". The digit model drops digits, it doesn't add a 9 in front:
+            # when there are two-digit reads, single digits among them are the misreads.
+            big = [v for v in vals if v >= 10]
+            vals = big if big else vals
+            return sorted(vals)[len(vals) // 2]
         self._evidence("mission_panel", [], wps, title)          # screenshot + what was read, for review
         return None if seen else "gone"
 
@@ -107,6 +116,10 @@ class MissionNpc(FindNearest):
             print(f"[mission] name tags not read: {e}")
         tags = []
         for t, b in boxes:
+            # 17 Nov: it /tar'd "you", "are", "bothering"... from the NPC's speech bubble. A name
+            # tag is one to three words; a sentence (four or more, or ? ! . in it) is speech.
+            if len(t.split()) >= 4 or any(ch in t for ch in "?!.,\""):
+                continue
             words = [wd for wd in re.findall(r"[a-z']{3,}", t.lower()) if wd not in self._NOT_NAMES]
             if words and (b[3] - b[1]) < 40 * h / 1440:
                 tags.append((words[0], ((b[0] + b[2]) // 2, b[3])))
@@ -204,14 +217,23 @@ class MissionNpc(FindNearest):
     def _outcome(self, title, d0, mark):
         lines = [ln.lower() for ln in (self.runner.chat_since(mark) if mark is not None else [])]
         done = next((ln for ln in lines if "mission complete" in ln), None)
-        said = next((ln for ln in lines if "says to" in ln), None)
-        d1 = self.panel_dist(title, reads=2)
+        # 17 Nov: picked up on the first talk ("This speech needs to be delivered...", Bine Enane
+        # says to Sumane Larif) but not recognised: the chat OCR read "says sumane larif", without
+        # the "to", and the waypoint distance before the talk wasn't read. Any "says" line after
+        # our talk is the NPC answering; "still here? / deliver that item" means it was done before.
+        said = next((ln for ln in lines if re.search(r"\bsays\b", ln)), None)
+        again = next((ln for ln in lines if "still here" in ln or "deliver that" in ln), None)
+        d1 = self.panel_dist(title, reads=3)
         out = {"chat": lines[-4:], "waypoint_after": d1, "result": None}
         if done:
             m = re.search(r"reward of\s*([\d,]+)", done)
             out.update(result="completed", reward=int(m.group(1).replace(",", "")) if m else None)
+        elif again:
+            out["result"] = "picked_up"            # "why are you still here? go deliver that item"
         elif isinstance(d0, int) and isinstance(d1, int) and abs(d1 - d0) > 50:
             out["result"] = "picked_up"            # the waypoint moved to the destination
+        elif isinstance(d1, int) and d1 >= 30 and not (isinstance(d0, int) and d0 >= 30):
+            out["result"] = "picked_up"            # we're beside him and his waypoint is 30+ m off: it moved
         elif said and d1 == "gone":
             out["result"] = "completed"
         elif said:
@@ -356,6 +378,11 @@ class CloseIn(MissionNpc):
                     believed, since = float(raw), 0.0
             est = None if believed is None else max(0.0, believed - since)
             log.append({"step": step, "arrow": arrow, "raw": raw, "est": est, "pos": pos, "blocked": blocked})
+            if est is not None and est > 25:
+                # 17 Nov: handed over 40 m out (the navigator took a misread "1 m" as arrival).
+                # This skill is for the last few metres: give it back to the navigator.
+                print(f"[close] '{title}' is {est:.0f} m away: too far for close_in, back to the navigator")
+                return Result("failed", "too_far", {"dist": est, "log": log, "pos": pos})
             if est is not None and est <= stop_m:
                 print(f"[close] there: {est:.0f} m from '{title}' after {step} steps")
                 return Result("ok", "", {"dist": est, "steps": step, "pos": pos, "log": log})
@@ -380,7 +407,10 @@ class CloseIn(MissionNpc):
             # target is clear (16 Nov: trying left, then right, then left again just shuffles on
             # the spot). Only if that way is shut too does it turn round and go along the other way.
             blocked += 1
-            if blocked > 12:
+            # 17 Nov: 11 "blocked" in a row, 1 m each, until Marc stopped it. Three is a pattern:
+            # hand back to the chain (D* has another go, then the talk) and keep the evidence.
+            self._look(f"blocked{blocked}")
+            if blocked >= 3:
                 self._anomaly("close_in_blocked", title=title, log=log[-8:])
                 return Result("failed", "blocked", {"log": log, "dist": est, "pos": pos, "anomalies": self.anomalies})
             keys.tap("BACK", 0.25)
