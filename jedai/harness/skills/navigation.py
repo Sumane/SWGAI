@@ -113,7 +113,8 @@ class FollowWaypoint(Skill):
 
     def run(self, state, expect: float | None = None, label: str | None = None, stop: float | None = None, **_) -> Result:
         try:
-            outcome = self.runner.navigate(target_name=label, expect_dist=expect, target_xz=None, stop_dist=stop)
+            # target_name=None makes navigate() ask on the console for a vehicle (16 Nov): never pass None
+            outcome = self.runner.navigate(target_name=label or "", expect_dist=expect, target_xz=None, stop_dist=stop)
         finally:
             _sync_mount(self.runner, state)
         pos = self.runner.read_position()
@@ -122,7 +123,7 @@ class FollowWaypoint(Skill):
         data = {"outcome": outcome}
         if outcome == "arrived":
             return Result("ok", "", data)
-        if outcome in ("dead", "no_waypoint") or outcome.startswith("crashed"):
+        if outcome in ("dead", "no_waypoint", "lost_waypoint") or outcome.startswith("crashed"):
             return Result("failed", outcome.split(":")[0], data)
         return Result("stuck", outcome, data)
 

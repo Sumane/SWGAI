@@ -293,8 +293,18 @@ class RecoverFromDeath(Skill):
         # 6. walk out
         c = self.settings.nav
         rec = getattr(self.runner, "rec", None)
-        follower = RouteFollower(self.runner.read_position, keys,
-                                 turn_rate_deg_s=float(c.get("turn_rate_deg_s", 100.0)),
+        # a facing read from the screen, so the walk doesn't have to shuffle about to find it
+        compass, facing_fn = None, None
+        try:
+            from ...navigation.compass import Compass
+            compass = Compass(self.runner, self.settings.planet, self.sleep)
+            here = self.runner.read_position()
+            if here is not None and compass.set(here):
+                facing_fn = compass.facing
+        except Exception as e:
+            print(f"[recover] compass not set: {e}")
+        follower = RouteFollower(self.runner.read_position, keys, facing_fn=facing_fn,
+                                 turn_rate_deg_s=float(c.get("standing_turn_deg_s", c.get("turn_rate_deg_s", 100.0))),   # turns are made standing
                                  right_turn_sign=int(c.get("right_turn_sign", -1)),
                                  should_stop=self.runner.should_stop, sleep=self.sleep, clock=self.clock,
                                  on_event=self._route_event)

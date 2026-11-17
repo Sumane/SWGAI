@@ -40,7 +40,7 @@ class RouteFollower:
     def __init__(self, read_position, keys, *, turn_rate_deg_s: float = 100.0, right_turn_sign: int = -1,
                  reach_m: float = 2.5, final_reach_m: float = 3.0, speed_m_s: float = 5.0,
                  max_burst_s: float = 1.4, settle_s: float = 0.3, max_stuck: int = 10,
-                 timeout_s: float | None = None, should_stop=lambda: False, on_event=None,
+                 timeout_s: float | None = None, should_stop=lambda: False, on_event=None, facing_fn=None,
                  sleep=time.sleep, clock=time.time):
         self.read_position, self.keys = read_position, keys
         self.turn_rate, self.sign = float(turn_rate_deg_s), int(right_turn_sign)
@@ -49,6 +49,9 @@ class RouteFollower:
         self.max_stuck, self.timeout = max_stuck, timeout_s
         self.should_stop, self.sleep, self.clock = should_stop, sleep, clock
         self.on_event = on_event or (lambda kind, **kw: None)
+        # facing_fn() -> compass bearing faced (deg clockwise from north) or None: a facing read
+        # from the screen (navigation/compass.py). With it, turns are checked, not assumed.
+        self.facing_fn = facing_fn
         self.heading = None          # unit (x, z) the character faces, once known
         self.track = []              # positions seen, for the log
         self.actions = []            # every key tap with the position after it, for review
@@ -87,6 +90,39 @@ class RouteFollower:
         if self.heading is not None:
             self.heading = _rot(self.heading, deg)
 
+    def _compass(self, force=False):
+        """Take the facing from the compass if there is one. It's only good to 45 degrees, so it
+        replaces what we believe only when that's unknown, forced, or more than 35 degrees out."""
+        if self.facing_fn is None:
+            return False
+        th = self.facing_fn()
+        if th is None:
+            return False
+        h = (math.sin(math.radians(th)), math.cos(math.radians(th)))
+        if force or self.heading is None or (self.heading[0] * h[0] + self.heading[1] * h[1]) < math.cos(math.radians(35)):
+            self.heading = h
+        return True
+
+    def _aim(self, target, pos, tol=30.0):
+        """Turn towards target. With a compass: turn, look, turn again until it's within tol
+        (16 Nov: timed turns came to less than half of what was asked)."""
+        for n in range(5):
+            if self.heading is None:
+                return
+            dx, dz = target[0] - pos[0], target[1] - pos[1]
+            ang = math.degrees(math.atan2(self.heading[0] * dz - self.heading[1] * dx,
+                                          self.heading[0] * dx + self.heading[1] * dz))
+            if abs(ang) <= (12 if n == 0 else tol):
+                return
+            before = abs(ang)
+            self._turn(ang)
+            if not self._compass(force=True):
+                return                      # no compass: one timed turn, as before
+            ax = math.degrees(math.atan2(self.heading[0] * dz - self.heading[1] * dx,
+                                         self.heading[0] * dx + self.heading[1] * dz))
+            if abs(ax) > before + 30:
+                self.sign = -self.sign      # it turned the wrong way: LEFT/RIGHT are the other way round
+
     def _learn_heading(self, p0, p1, moved, coarse_ok=False):
         # whole-metre reads: 2 m gives a fair direction; 1 m only a rough one
         # (used when nothing better is known, e.g. boxed into a clone tube)
@@ -98,6 +134,7 @@ class RouteFollower:
         """('arrived' | 'stuck' | 'timeout' | 'stopped' | 'no_position', info)."""
         wps = [(float(x), float(z)) for x, z in waypoints]
         t0, stuck, i = self.clock(), 0, 0
+        best_i, best_d = -1, 1e9
         # 16 Nov, Keren Starport: a fixed 120 s ran out two-thirds of the way
         # along a 100 m walk that was going fine. Allow time by length.
         length = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(wps, wps[1:]))
@@ -129,12 +166,19 @@ class RouteFollower:
                     i += 1
                     continue
                 break
+            self._compass()
             if self.heading is None:
                 # Which way are we facing? Step and see. 16 Nov, Theed clone
                 # tube: 0.6 s steps moved ~1 m whichever way it turned, so
                 # take a longer step, accept a 1 m move as a rough facing,
                 # and sweep round in 45 degree steps without backing off.
                 p0, p1, moved = self._forward(1.0)
+                if 1.0 <= moved < 2.0:
+                    # 1 m on whole-metre reads is only a direction to within 45 deg: step on
+                    # the same way and take the facing from both steps together
+                    _, p2, _ = self._forward(1.0)
+                    if p2 is not None and math.hypot(p2[0] - p0[0], p2[1] - p0[1]) > moved:
+                        p1, moved = p2, math.hypot(p2[0] - p0[0], p2[1] - p0[1])
                 self._learn_heading(p0, p1, moved, coarse_ok=True)
                 if self.heading is None:
                     stuck += 1
@@ -158,27 +202,34 @@ class RouteFollower:
                     break
             dx, dz = wps[j][0] - pos[0], wps[j][1] - pos[1]
             d_aim = math.hypot(dx, dz)
-            ang = math.degrees(math.atan2(self.heading[0] * dz - self.heading[1] * dx,
-                                          self.heading[0] * dx + self.heading[1] * dz))
-            if abs(ang) > 12:
-                self._turn(ang)
+            self._aim(wps[j], pos)
             burst = max(0.25, min(self.max_burst, 0.8 * d_aim / max(self.speed, 1.0)))
             p0, p1, moved = self._forward(burst, p0=pos)
             if moved >= 1.0:
-                stuck = 0
                 self.speed = 0.6 * self.speed + 0.4 * max(2.0, min(12.0, moved / burst))
                 self._learn_heading(p0, p1, moved)
+                # 16 Nov, Theed clone tube: a 1 m shuffle reset the count every time, so it tried
+                # the same side-step for ever. Only getting nearer the point counts as progress.
+                d_now = math.hypot(wps[i][0] - p1[0], wps[i][1] - p1[1]) if p1 else 1e9
+                if i != best_i or d_now < best_d - 1.0:
+                    best_i, best_d, stuck = i, d_now, 0
             else:
                 stuck += 1
                 self.on_event("route_blocked", pos=p1, wp=i, n=stuck)
                 if stuck > self.max_stuck:
                     return "stuck", self._info(i, wps)
                 if stuck >= 2:
-                    # against something: back off, try to one side (wider each time), re-measure
+                    # against something: back off, try to one side, then the other, wider each
+                    # time; once a side-step moves, keep going that way before aiming again
+                    n = stuck // 2
                     self.keys.tap("BACK", 0.4)
                     self.sleep(self.settle)
-                    self._turn((40 + 15 * (stuck // 2)) * (1 if stuck % 2 == 0 else -1))
+                    self._turn(min(150, 30 + 30 * ((n + 1) // 2)) * (1 if n % 2 else -1))
                     q0, q1, m = self._forward(0.8)
+                    if m >= 1.0:
+                        _, q2, _ = self._forward(0.8)
+                        if q2 is not None and math.hypot(q2[0] - q0[0], q2[1] - q0[1]) > m:
+                            q1, m = q2, math.hypot(q2[0] - q0[0], q2[1] - q0[1])
                     self._learn_heading(q0, q1, m, coarse_ok=True)
 
     def _info(self, i, wps):

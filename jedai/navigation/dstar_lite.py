@@ -101,6 +101,7 @@ class DStarLite:
         self.prior = prior
         self.cost_prior_blocked = cost_prior_blocked
         self._prior_cache = {}
+        self._penalty = {}        # node -> extra cost from failed tries near it (add_penalty)
         self.planet     = planet
         self.resolution = resolution
         self.cost_clear      = cost_clear
@@ -278,8 +279,14 @@ class DStarLite:
         if to_state == UNEXPLORED and self.prior is not None:
             f = self._prior_fraction(to_node)
             if f is not None:
-                # walkable -> as cheap as clear; not walkable -> dear but never a wall
-                base = self.cost_clear + (1.0 - f) * (self.cost_prior_blocked - self.cost_clear)
+                # 16 Nov (Marc: "weights between 1 and 30 are stupid"): at 30 a wall was worth a
+                # 60 m detour, so D* planned through buildings. Now a cell the navmesh says is
+                # mostly not walkable is a wall in all but name (finite, so there's still a route
+                # if the navmesh is wrong); a mostly walkable one (a doorway that half-fills its
+                # cell) stays cheap.
+                base = (self.cost_clear + (1.0 - f) * 10.0) if f >= 0.5 else self.cost_prior_blocked
+        # every failed try near here has made this cell dearer (add_penalty)
+        base += self._penalty.get(to_node, 0.0)
         # Diagonal movement costs sqrt(2) more
         if from_node[0] != to_node[0] and from_node[1] != to_node[1]:
             return base * math.sqrt(2)
@@ -390,6 +397,41 @@ class DStarLite:
         if self._goal is None or self._start is None:
             return
         self._update_around(node)
+        self._dirty = True
+
+    def note_avoid(self, wx: float, wz: float):
+        """
+        A cell the navigator would rather not go through for the rest of this run (it backed
+        out of a pocket here): priced like a cell bumped once, so D* goes round when it can and
+        still has a route when it can't. Planner only, nothing saved; a known wall stays a wall.
+        """
+        node = (world_to_cell(wx, self.resolution), world_to_cell(wz, self.resolution))
+        if self._cell_states.get(node, UNEXPLORED) in (BLOCKED, SUSPECT):
+            return
+        self.note_cell(wx, wz, SUSPECT)
+
+    def add_penalty(self, wx: float, wz: float, radius_m: float, amount: float):
+        """
+        The bot failed to get on from here: every cell within radius_m costs `amount` more (less
+        towards the edge) for as long as this planner lives. Called again for each further
+        failure, so a place it keeps failing in gets dearer and dearer until any other way,
+        including back the way it came, is cheaper. Nothing is saved to the map.
+        """
+        cx, cz = world_to_cell(wx, self.resolution), world_to_cell(wz, self.resolution)
+        k = int(radius_m / self.resolution) + 1
+        touched = []
+        for dx in range(-k, k + 1):
+            for dz in range(-k, k + 1):
+                d = math.hypot(dx, dz) * self.resolution
+                if d > radius_m:
+                    continue
+                node = (cx + dx, cz + dz)
+                self._penalty[node] = self._penalty.get(node, 0.0) + amount * (1.0 - 0.5 * d / max(radius_m, 1e-6))
+                touched.append(node)
+        if self._goal is None or self._start is None:
+            return
+        for node in touched:
+            self._update_around(node, r=1)
         self._dirty = True
 
     def _update_around(self, node, r: int = 2):

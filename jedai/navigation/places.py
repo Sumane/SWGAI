@@ -142,7 +142,9 @@ def parse_target(text: str):
     m = re.search(r"([a-z][a-z' \-]+?)\s*[\(\[\{]\s*([\dolisgbz.,]+)\s*m\s*[\)\]\}]?", t)
     if not m:
         return None
-    digits = m.group(2).translate(str.maketrans("olisgbz", "0115982")).replace(",", "").split(".")[0]
+    # 16 Nov: the bar's "(7m)" reads as "( zm)"; "z" was taken for a 2, so a terminal 7 m off
+    # counted as in reach and the browser opened empty ("too far away to 'List Missions'")
+    digits = m.group(2).translate(str.maketrans("olisgbz", "0115987")).replace(",", "").split(".")[0]
     if not digits.isdigit():
         return None
     return m.group(1).strip(), int(digits)

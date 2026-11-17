@@ -17,7 +17,7 @@ def legacy_mode(s):
     """The navmesh-free variant these drives were written for: 5 m cells, map
     everything, one bump = wall. The 8 Nov mode (navmesh map, 2 m cells,
     stuck-only, two strikes) is tested at the bottom with a navmesh."""
-    s.raw["navigation"].update(cell_size=5.0, map_only_when_stuck=False, two_strikes=False)
+    s.raw["navigation"].update(cell_size=5.0, map_only_when_stuck=False, two_strikes=False, standing_turn_deg_s=100.0)
     s.raw["planner"].update(resolution_m=5, navmesh_prior=False, search_radius_m=300.0, bound_margin_m=150.0)
     return s
 
@@ -540,6 +540,7 @@ def _new_mode_run(tmp_path, monkeypatch, world, navmesh_walls, minutes=15, scree
     answers = iter(["", "0"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     s = _load_settings(local_file="none.yaml")             # the real (new) settings
+    s.raw["navigation"]["standing_turn_deg_s"] = 100.0     # the simulator turns as fast standing as moving
     s.raw["paths"]["nav_db"] = str(tmp_path / "nav.db")
     s.raw["navigation"]["right_turn_sign"] = -1
 
@@ -574,3 +575,34 @@ def test_new_mode_wall_missing_from_navmesh(tmp_path, monkeypatch):
     world = World(Clock(), target=(400.0, 0.0), walls=((140, -60, 150, 60),), right_is_clockwise=True)
     s = _new_mode_run(tmp_path, monkeypatch, world, navmesh_walls=())
     assert world.dist() <= s.nav["stop_dist"], f"ended {world.dist()}m away"
+
+
+def test_pocket_on_foot_is_sealed_and_left_the_way_it_came(tmp_path, monkeypatch, capsys):
+    """16 Nov (Marc): 26 bumps inside a 6 m box, 'failed to get out of a hole'. A dead end the
+    navmesh doesn't know, entered on foot: after a few bumps the pocket is closed as a whole and
+    the bot walks back out along its own track, then round."""
+    pocket = ((136, -22, 144, 22), (100, 14, 144, 22), (100, -22, 144, -14))      # open to the west only, 36 m deep
+    world = World(Clock(), target=(400.0, 0.0), walls=pocket, right_is_clockwise=True)
+    world.SPEED = 10.5
+    clock = world.clock
+    for mod in (nav_mod, runner_mod):
+        monkeypatch.setattr(mod.time, "time", clock.time)
+        monkeypatch.setattr(mod.time, "sleep", clock.sleep)
+    answers = iter(["", "0"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    s = _load_settings(local_file="none.yaml")
+    s.raw["paths"]["nav_db"] = str(tmp_path / "nav.db")
+    s.raw["navigation"]["right_turn_sign"] = -1
+    s.raw["navigation"]["default_vehicle"] = "running"
+    s.raw["navigation"]["standing_turn_deg_s"] = 100.0
+    s.raw["harness"]["mount_key"] = ""
+    monkeypatch.setattr(runner_mod.NavigationRunner, "_navmesh_prior", lambda self, p: (lambda wx, wz: 1.0))
+    r = NavigationRunner(s, hud=SimHud(world), keys=SimKeys(world, clock), screen=SimScreen(world, clock))
+    r.vel_tracker._clock = clock.time
+    r.apply_vehicle("running")
+    r.should_stop = lambda: clock.t > 1000 + 60 * 20
+    r.navigate()
+    out = capsys.readouterr().out
+    key = [ln for ln in out.splitlines() if any(w in ln for w in ("BACKTRACK", "Backed out", "off-limits", "trapped", "AREA", "no route"))]
+    assert world.dist() <= s.nav.get("stop_dist_on_foot", 10) + 2, f"ended {world.dist()}m away ({r._end_reason})\n" + "\n".join(key[:60])
+    assert "trapped" not in out

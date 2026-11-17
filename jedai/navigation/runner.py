@@ -659,6 +659,14 @@ class NavigationRunner:
         if expect_dist is not None:
             tol = 25.0 + 0.03 * expect_dist
             close = [wp for wp in waypoints if abs(wp["distance"] - expect_dist) <= tol]
+            if close and name:
+                # 16 Nov: one row was read twice, as 'Gtan' and 'Grano Work of Mineralogy', both 295 m.
+                # 'Gtan' was picked, never matched the panel again, and the bot drove blind. With a
+                # name, take the row that reads like it and track it under the name we were given.
+                named = [wp for wp in close if fuzzy_match(name, wp["name"], getattr(self, "cfg", {}).get("fuzzy_threshold", 0.5))]
+                if named:
+                    best = min(named, key=lambda wp: abs(wp["distance"] - expect_dist))
+                    return {**best, "name": name}
             if close:
                 return min(close, key=lambda wp: abs(wp["distance"] - expect_dist))
             print(f"No waypoint at ~{expect_dist:.0f} m (±{tol:.0f}) in "
@@ -793,6 +801,7 @@ class NavigationRunner:
     def _main_loop(self, run_id) -> bool:
         c, k, nav = self.cfg, self.keys, self.navigator
         lost_timer = None
+        lost_runs = 0                 # re-aligns in a row with no distance read in between
         self._run_track = []
         worse_ticks = 0
 
@@ -829,6 +838,13 @@ class NavigationRunner:
                 elif time.time() - lost_timer > c["ocr_stale_limit"]:
                     print(f"\n⚠️  Lost for {c['ocr_stale_limit']:.0f}s, searching...")
                     k.key_up("FORWARD")
+                    lost_runs += 1
+                    if lost_runs >= int(c.get("lost_give_up", 4)):
+                        # 16 Nov: lost 11 times in a row and still drove on at 16 m/s, 500 m off
+                        print(f"\n🛑  Waypoint '{self.target_name}' not read {lost_runs} times running: stopping")
+                        self._end_reason = "lost_waypoint"
+                        k.stop_movement()
+                        return False
                     self.hard_align("N")
                     nav.reset_estimator()
                     k.key_down("FORWARD")
@@ -836,6 +852,7 @@ class NavigationRunner:
                 time.sleep(c["loop_interval"])
                 continue
             lost_timer = None
+            lost_runs = 0
 
             self.last_valid_dist = dist
             self.min_dist_seen = min(self.min_dist_seen, dist)
@@ -888,10 +905,28 @@ class NavigationRunner:
                 self._approach_off_until = now + 30
                 self._approaching = False
                 k.key_down("FORWARD")
-            if (not self.mounted and approach and stop < dist <= approach
+                nav.hold_stuck(2.0)
+            # 16 Nov (Marc): approach mode steers by the arrow, straight at the target, so it walked
+            # into a wall D* had already planned a way round. Only take over from D* when D*'s own
+            # route is about as short as the straight line; otherwise D* keeps driving to the end.
+            straight = True
+            try:
+                if getattr(self, "planner_active", False) and self.planner is not None:
+                    # D*'s cost is about 1 per clear cell, more through doubtful ones
+                    cost_m = self.planner.path_cost() * nav.cell
+                    if cost_m == cost_m and cost_m < 1e8:
+                        straight = cost_m <= c.get("approach_max_detour", 1.4) * dist + 6
+            except Exception:
+                pass
+            if self._approaching and not straight:
+                self._approaching = False
+                k.key_down("FORWARD")
+                nav.hold_stuck(2.0)
+            if (not self.mounted and approach and stop < dist <= approach and straight
                     and now >= self._approach_off_until):
                 self._approaching = True
                 k.key_up("FORWARD")
+                nav.hold_stuck(4.0)                 # stepping, not stuck
                 if arrow and arrow != "N":
                     deg = {"NE": 45, "E": 90, "SE": 135, "S": 180, "SW": 135, "W": 90, "NW": 45}.get(arrow, 45)
                     rate = self.turn_rate_deg_s or c.get("turn_rate_deg_s", 100.0)
@@ -905,7 +940,9 @@ class NavigationRunner:
             if self._approaching and dist > approach:
                 self._approaching = False
                 k.key_down("FORWARD")
+                nav.hold_stuck(2.0)
             if dist <= stop:
+                nav.hold_stuck(3.0)                 # there, counting readings: not stuck
                 self.close_read_count += 1
                 if dist <= creep:
                     k.key_up("FORWARD")

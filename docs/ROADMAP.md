@@ -22,6 +22,42 @@ System 1 writes keys. Nothing skips a level. Every skill returns a result:
 `ok`, `failed(reason)` or `stuck`. A failure goes up one level, never straight
 to the LLM.
 
+### 0.1 Where the three systems stand (16 Nov 2026)
+
+Marc's wording on the day: a harness for linked commands, a small decision model
+for quick changes of decision, and the 27B to run the harness and manage
+long-horizon tasks. Same three systems as the table above.
+
+| System | State on 16 Nov |
+|---|---|
+| 1: skills + chains | Mostly built. Skills in `jedai/harness/skills/`, strung together by `jedai/harness/chain.py`, run with `scripts/go.py` (`travel`, `find`, `mission`, `deliver`, `abort`, `recover`). |
+| 2: small decision model | Not built. Its job is done by hard-coded rules in `chain.py` (retry the waypoint clean-up four times, prefer a place we know over `/find`, stop after four lost reads). Those rules are kept in the chain, not buried in skills, so they can be handed over. `system2.py` is still only the badge list. |
+| 3: the 27B (llama-server on the 5070 Ti) | Not built. Nothing calls the model yet. |
+
+**The tool list the 27B will call** (proposed, not yet agreed): what `go.py`
+already exposes (`travel`, `find`, `deliver`, `abort`, `recover`), plus a manual
+mode for escalations: look at the screen, click, press a key, done, give up.
+
+**Escalations (built 16 Nov).** When the scripts can't fix something, the run
+stops and `Chain.escalate()` leaves a request in
+`data/live/escalations/<time>_<reason>/`: `screen.jpg`, and `request.json` with
+the reason, a plain-language task, the last steps and `status: open`. One line
+per request goes in `escalations/index.jsonl`. First user: the waypoint
+clean-up (`waypoints_not_cleaned`). Nothing reads these yet; until the operator
+exists an escalation means the run waits for Marc.
+
+**The operator loop, when it's built:** read an open request, send the
+screenshot and task to the model, get one action back, do it through the same
+key controller, take a new screenshot, repeat until done or a step limit.
+
+**Open question.** The rule above says System 3 never touches keys and a
+failure goes up one level only. A 27B fixing the datapad by hand breaks both.
+Either the manual mode is an agreed exception for escalations, or the fixing is
+done by a separate vision operator that System 3 only asks. Not decided.
+
+Still needed before building it: the llama-server address and port, the exact
+model, and whether its vision projector is loaded.
+
 ---
 
 ## 1. Versions

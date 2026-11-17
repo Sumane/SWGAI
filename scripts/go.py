@@ -11,6 +11,8 @@ a step fails; if we're dead then, the clone is taken and the run stops.
     python scripts/go.py find bank                                  # walk up to the closest bank terminal
     python scripts/go.py mission --dry-run                          # go to a mission terminal, read the list, take nothing
     python scripts/go.py mission                                    # ...and take a delivery mission
+    python scripts/go.py abort [--dry-run]                          # drop every mission we hold (datapad, Data tab)
+    python scripts/go.py deliver                                    # take one and finish it: pickup, (shuttle), drop-off
 
 Starts the key controller itself if it isn't running. F8 stops it. You can
 take over at any point; rerun the command and it carries on from where the
@@ -36,6 +38,8 @@ def main():
     sub.add_parser("recover")
     f = sub.add_parser("find"); f.add_argument("what"); f.add_argument("--dry-run", action="store_true")
     m = sub.add_parser("mission"); m.add_argument("--dry-run", action="store_true")
+    ab = sub.add_parser("abort"); ab.add_argument("--dry-run", action="store_true")
+    dl = sub.add_parser("deliver"); dl.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 
     from pathlib import Path
@@ -65,14 +69,19 @@ def main():
     print("Switch to the game: starting in 5 s")
     time.sleep(5)
     try:
-        if a.goal != "recover":
-            chain.start()
-        if a.goal == "travel":
+        blocked = chain.start() if a.goal != "recover" else None
+        if blocked is not None:
+            res = blocked                      # couldn't start clean: escalated, nothing else is tried
+        elif a.goal == "travel":
             res = chain.travel(a.to, start=a.start)
         elif a.goal == "find":
             res = chain.find(a.what, dry_run=a.dry_run)
         elif a.goal == "mission":
             res = chain.mission(dry_run=a.dry_run)
+        elif a.goal == "abort":
+            res = chain.step("abort_missions", "drop every mission we hold", dry_run=a.dry_run, probe=True)
+        elif a.goal == "deliver":
+            res = chain.deliver(dry_run=a.dry_run)
         elif a.goal == "goto":
             res = chain.go_to(a.x, a.z, "route_goto", stop=a.stop)
         else:

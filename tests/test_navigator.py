@@ -306,7 +306,7 @@ def test_new_mode_no_clear_marks_while_driving(tmp_path):
 
 def test_new_mode_two_strikes_and_only_the_faced_cell(tmp_path):
     from jedai.navigation.grid_db import SUSPECT
-    n = Navigator(FakeRunner2(tmp_path), dict(NEW_CFG, blame_max_angle_deg=30))   # facing check is opt-in
+    n = Navigator(FakeRunner2(tmp_path), dict(NEW_CFG, blame_max_angle_deg=30, two_strikes=True))   # both opt-in (two strikes: off since 16 Nov)
     _route_east(n)
     nxt = n.r.planner.get_planned_path(max_steps=2)[1]
     # facing north, D* wants east: not the cell it pushed into, nothing marked
@@ -321,3 +321,22 @@ def test_new_mode_two_strikes_and_only_the_faced_cell(tmp_path):
     path = n.r.planner.get_planned_path(max_steps=2)
     n._mark_in_front((1.0, 1.0)) if path[1] == nxt else n.mark(nxt[0], nxt[1], BLOCKED)
     assert n.r.db.get_state("naboo", nxt[0], nxt[1]) == BLOCKED
+
+
+def test_one_bump_blocks_and_repeated_failures_make_the_place_dearer(tmp_path):
+    """16 Nov (Marc): "the bot needs to recognise if it can't get into a cell ... the more it
+    tries the more the weight should increase"."""
+    n = Navigator(FakeRunner2(tmp_path), NEW_CFG)
+    _route_east(n)
+    n.heading = (1.0, 0.0)
+    nxt = n.r.planner.get_planned_path(max_steps=2)[1]
+    n._apply_penalties()                                                     # (the tick does this)
+    n._mark_in_front((1.0, 1.0))
+    assert n.r.db.get_state("naboo", nxt[0], nxt[1]) == BLOCKED            # first bump: blocked
+    pen = n.r.planner._penalty
+    first = max(pen.values())
+    for k in range(1, 5):                                                    # stuck here again and again
+        n._recal_cycles = k
+        n._penalise((1.0, 1.0), (nxt[0], nxt[1]))
+    assert max(pen.values()) > 5 * first and len(pen) > 40                  # heavier and wider each time
+    assert n.r.planner.has_path()                                           # dearer, never shut

@@ -93,16 +93,31 @@ class FindNearest(TravelTo):
     # -- /find and the datapad ----------------------------------------------------------
     def _hud_waypoints(self):
         try:
+            # rows with a name but no distance are kept: 16 Nov, "Theed (Terminal) 1m" lost its "1"
             return [(w.name, w.distance) for w in self.runner.hud.waypoints(self.runner.screen.grab(), self.runner.should_stop)
-                    if w.distance]
+                    if w.distance or (w.name and w.name != "unknown")]
         except Exception as e:
             print(f"[find] waypoint list not read: {e}")
             return []
+
+    def _evidence(self, label, lines, wps, pick):
+        """Screenshot + what was read, for review (data/live/find/)."""
+        try:
+            import cv2
+            d = self._dir()
+            d.mkdir(parents=True, exist_ok=True)
+            self._step += 1
+            cv2.imwrite(str(d / f"{self._step:02d}_{label}.jpg"), self.runner.screen.grab(), [cv2.IMWRITE_JPEG_QUALITY, 85])
+            with open(d / "reads.txt", "a") as fh:
+                fh.write(f"{self._step:02d} {label}: chat={lines[-3:]!r} panel={wps!r} pick={pick!r}\n")
+        except Exception as e:
+            print(f"[find] evidence not saved: {e}")
 
     def _find_hud(self, info, reads: int = 3):
         """/find <category>, then the waypoint panel: {"category", "name", "city", "dist"}.
         None if the game has none on this planet; no "dist" if the panel never showed it."""
         keys = self.runner.keys
+        before = {norm(n or "") for n, _ in self._hud_waypoints()}
         mark = self.runner.chat_mark() if hasattr(self.runner, "chat_mark") else None
         keys.chat(f"/find {info['find']}")
         self.sleep(2.0)
@@ -119,9 +134,14 @@ class FindNearest(TravelTo):
             # with no waypoints but the player's own, and those don't look like that
             pick = [(n, d) for n, d in wps if said and (norm(n) == said or norm(n)[:8] == said[:8])]
             pick = pick or [(n, d) for n, d in wps if re.search(r"\(.+\)", n or "")]
-            if pick:
+            # 16 Nov, Lake Retreat: nothing matched. Chat repeats the same line every /find, so a
+            # diff of the chat window can miss it; a panel row that wasn't there before is the one
+            pick = pick or [(n, d) for n, d in wps if norm(n or "") not in before]
+            self._evidence(f"find_panel{i}", lines, wps, pick)
+            pick = sorted(pick, key=lambda nd: nd[1] is None)      # a row with its distance read first
+            if pick and (pick[0][1] is not None or i == reads - 1):
                 name, dist = pick[0]
-                out.update(name=name, dist=dist, city=re.split(r"\s*\(", name)[0].strip())
+                out.update(name=name, dist=dist, city=re.split(r"\s*[\(\[{]", name or "")[0].strip())
                 return out
             self.sleep(0.7)
         if not said:
@@ -164,11 +184,15 @@ class FindNearest(TravelTo):
                 data["waypoint"] = wp
                 dist = wp.get("dist")
                 print(f"[find] /find {info['find']}: {wp.get('name', '?')}, {dist} m")
-                if dist is None:
+                near_known = place is not None and far <= 40
+                if dist is None and near_known and info.get("target"):
+                    # no distance on the panel, but we know one of these is right here: /tar
+                    print(f"[find] no distance read; the known {place['name']} is {far:.0f} m away: /tar")
+                elif dist is None:
                     # a waypoint we can't read is no use, and /tar can't reach 4 km: stop and log
                     self._anomaly("find_waypoint_not_read", **data)
                     return Result("failed", "waypoint_not_read", {**data, "anomalies": self.anomalies})
-                if dist > 40 or not info.get("target"):
+                elif dist > 40 or not info.get("target"):
                     return Result("ok", "waypoint", data)
                 keys.chat("/find clear")           # it's right here: /tar does the rest
         # 2. /tar, looking all round: the last few metres

@@ -35,7 +35,7 @@ def parse_distance(raw: str | None) -> int | None:
     numeric = re.sub(r"[^0-9]", "", raw)
     if numeric:
         val = int(numeric)
-        if 0 < val < 9999:
+        if 0 < val < 30000:          # 16 Nov: 11690 m (Dee'ja Peak from Theed) was thrown away at < 9999
             return val
     return None
 
@@ -50,6 +50,8 @@ def repair_extra_digit(value: int | None, last: int | None, tol: float) -> int |
     """
     if value is None or last is None:
         return value
+    if abs(value - last) <= tol:
+        return value          # 16 Nov: a true 10 m after 7 m was "repaired" to 1 m, so the walk stopped 10 m short
     s = str(value)
     if len(s) != len(str(last)) + 1:
         return value

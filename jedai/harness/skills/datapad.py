@@ -55,7 +55,7 @@ def ocr_boxes(ocr, img, x0=0, y0=0):
 
 def norm(s: str) -> str:
     """Compare names despite OCR: lower-case, '_' and '-' and spaces alike."""
-    return re.sub(r"[\s_\-.]+", "_", s.lower()).strip("_")
+    return re.sub(r"[\s_\-.]+", "_", (s or "").lower()).strip("_")      # a panel row can have no name read
 
 
 def find_text(boxes, *words):
@@ -77,7 +77,46 @@ def datapad_region(boxes, frame_shape):
     return t[0] - int(5 * sx), t[1], min(w, t[0] + int(530 * sx)), min(h, t[1] + int(390 * sy))
 
 
-def waypoint_labels(boxes, region, prefixes, keep=()):
+def _letters(s: str) -> str:
+    return re.sub(r"[^a-z]", "", (s or "").lower())
+
+
+def reads_like(label: str, name: str, thr: float = 0.8) -> bool:
+    """A grid label (small text, often one line of two, badly read: "deeta", "shuttlepott")
+    against a waypoint's name ("Dee'ja Peak Shuttleport"): like its first word, or its start."""
+    import difflib
+    a = _letters(label)
+    if len(a) < 5:              # "deen" is too little to tell "Dee'ja" from another waypoint
+        return False
+    words = [_letters(w) for w in re.split(r"[\s_]+", name or "")]
+    # the name's first word or its start only: a later word ("Shuttleport") is shared by other waypoints
+    cands = [w for w in words[:1] if len(w) >= 4] + [_letters(name)[:len(a)], _letters(name)[:len(a) + 1]]
+    return any(difflib.SequenceMatcher(None, a, c).ratio() >= thr for c in cands if c)
+
+
+def confirm_ok_xy(boxes, frame_shape, *words):
+    """Where to click OK on an "Are you sure ...?" [Cancel] [OK] box, or None if the box isn't up.
+    16 Nov: the question was read as two boxes ("are you sure" | "want to accept this mission?");
+    measuring from the first half put the click on Cancel. So: the whole line of the question,
+    and Cancel as a second landmark (OK's middle is 156 px right of Cancel's at 2560 wide)."""
+    ask = find_text(boxes, *words)
+    if ask is None:
+        return None
+    sx, sy = frame_shape[1] / 2560, frame_shape[0] / 1440
+    line = [b for t, b in boxes if abs(b[1] - ask[1]) <= 8 * sy and abs(b[0] - ask[0]) <= 420 * sx and len(t) >= 3]
+    qx0, qx1 = min(b[0] for b in line), max(b[2] for b in line)
+    qcx = (qx0 + qx1) // 2
+    below = lambda b: 0 < b[1] - ask[1] < 60 * sy
+    ok = next((b for t, b in boxes if t.strip(" .[]|") in ("ok", "0k") and below(b) and b[0] > qcx - 20 * sx), None)
+    if ok is not None:
+        return (ok[0] + ok[2]) // 2, (ok[1] + ok[3]) // 2
+    cancel = next((b for t, b in boxes if t.strip(" .[]|").startswith("cancel") and below(b)), None)
+    if cancel is not None:
+        return (cancel[0] + cancel[2]) // 2 + int(156 * sx), (cancel[1] + cancel[3]) // 2
+    return qcx + int(71 * sx), ask[1] + int(24 * sy)
+
+
+def waypoint_labels(boxes, region, prefixes, keep=(), names=()):
     """
     Labels under waypoint icons that start with one of `prefixes` (the bot's
     own waypoints) and aren't in `keep`. Returns [(label, icon_xy)].
@@ -100,7 +139,7 @@ def waypoint_labels(boxes, region, prefixes, keep=()):
                for t, b in boxes):
             continue
         n = norm(text)
-        if not any(n.startswith(p) for p in pre):
+        if not any(n.startswith(p) for p in pre) and not any(reads_like(text, nm) for nm in names):
             continue
         if any(n.startswith(k) or k.startswith(n) for k in keep_n):
             continue
@@ -227,9 +266,13 @@ class CleanWaypoints(Skill):
         y = qbot + int(15 * sy)
         return (pick("yes", (qcx + int(60 * sx), y)), pick("no", (qcx - int(41 * sx), y)))
 
-    def run(self, state, keep=(), dry_run: bool = False, max_delete: int = 30, **_) -> Result:
+    def run(self, state, keep=(), dry_run: bool = False, max_delete: int = 30, extra=(), **_) -> Result:
         h = self.settings.raw.get("harness", {})
-        prefixes = h.get("bot_waypoint_prefixes", ["badge_", "route_", "bot_"])
+        prefixes = list(h.get("bot_waypoint_prefixes", ["badge_", "route_", "bot_"]))
+        # 16 Nov (Marc): the HUD panel must be empty at the start of a run. `extra` = names showing
+        # on the panel (active waypoints, whoever made them): those go too. Waypoints that are only
+        # in the datapad, switched off, are left alone.
+        names = [nm for nm in (extra or ()) if len(_letters(nm)) >= 4]
         keys = self.runner.keys
         if self._ocr() is None:
             return Result("failed", "no_ocr")
@@ -252,7 +295,7 @@ class CleanWaypoints(Skill):
                     return Result("failed", "datapad_not_found", {"deleted": deleted})
                 if i == 0:
                     frame, boxes = self._waypoints_tab(frame, boxes, region)
-                labels = [lb for lb in waypoint_labels(boxes, region, prefixes, keep)
+                labels = [lb for lb in waypoint_labels(boxes, region, prefixes, keep, names)
                           if norm(lb[0]) not in skipped]
                 if dry_run:
                     self._annotate(frame, region, labels, out_dir / "dry_run.jpg")
@@ -305,7 +348,13 @@ class CleanWaypoints(Skill):
                         break
                 ask = find_text(boxes, "really destroy")
                 asked = next((t for t, b in boxes if "really destroy" in t), "")
-                if ask is None or not norm(asked.replace("really destroy", "")).startswith(norm(label)[:8]):
+                # 16 Nov: "Really destroy bot_compass?" was read as two boxes, "really destroy bot_" and
+                # the rest, so the check failed and the waypoint stayed. Either starting like the other will do.
+                said, want = norm(asked.replace("really destroy", "")), norm(label)
+                import difflib
+                named = any(difflib.SequenceMatcher(None, _letters(said), _letters(nm)).ratio() >= 0.7 and reads_like(label, nm)
+                            for nm in names)       # the box names a waypoint from the panel, and that's the one we clicked
+                if ask is None or len(said) < 3 or not (named or said.startswith(want[:8]) or want.startswith(said[:8])):
                     print(f"[datapad] confirm box didn't check out for {label}: asked={asked!r}")
                     # not the box we expected, or it names another waypoint: back out
                     self._anomaly("confirm_mismatch", label=label, asked=asked)
@@ -327,7 +376,7 @@ class CleanWaypoints(Skill):
                     break
                 region = datapad_region(boxes, frame.shape)
                 n_after = 0 if region is None else sum(
-                    1 for t, _ in waypoint_labels(boxes, region, prefixes, keep) if norm(t) == norm(label))
+                    1 for t, _ in waypoint_labels(boxes, region, prefixes, keep, names) if norm(t) == norm(label))
                 if n_after >= n_before:
                     print(f"[datapad] {label} still listed after Yes: skipping it")
                     self._anomaly("still_listed", label=label)
@@ -369,3 +418,138 @@ class CleanWaypoints(Skill):
             cv2.circle(img, (x, y), 18, (0, 0, 255), 3)
             cv2.putText(img, text[:20], (x - 40, y - 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
         cv2.imwrite(str(path), img)
+
+
+class AbortMissions(CleanWaypoints):
+    """
+    Drop every mission we hold, the way Marc did it (recording 16 Nov,
+    data/captures/2026-11-16_164723_cancel_mission):
+
+      Ctrl+D -> Data tab: missions sit beside the vehicles, named after the mission
+      ("Grand Work of Mineral...") -> right-click the icon -> radial "1) Details
+      2) Deactivate 3) Abort Mission" -> Abort Mission -> box "Are you sure you want
+      to remove this mission?" [Cancel] [OK] -> OK.
+
+    Which icons are missions isn't known from the label alone, so each icon is
+    right-clicked and only one whose radial offers "Abort Mission" is touched.
+    """
+    name = "abort_missions"
+    _SKIP = ("speeder", "swoop", "landspeeder", "unit", "droid", "x31", "x34", "helper", "bike")
+
+    def _icons(self, boxes, region, k):
+        x0, y0, x1, y1 = region
+        gx0 = x0 + int(0.225 * (x1 - x0))
+        rows = [(t, b) for t, b in boxes if gx0 <= b[0] and b[2] <= x1 and y0 + 60 * k <= b[1] <= y1 - 90 * k and len(t.strip()) >= 3]
+        out = []
+        for t, b in sorted(rows, key=lambda tb: (tb[1][1], tb[1][0])):
+            cx = (b[0] + b[2]) // 2
+            # a label has two lines: keep the top one of each column
+            if any(abs(cx - ox) < 45 * k and 0 < b[1] - oy < 45 * k for _, (ox, oy), _ in out):
+                continue
+            if any(w in t for w in self._SKIP):
+                continue
+            out.append((t, (cx, b[1]), (cx, b[1] - int(1.6 * (b[3] - b[1])))))
+        return out
+
+    def _selected(self, frame, region, k):
+        """The pane on the left after an icon is selected: (says "Mission Object", the name above it)."""
+        x0, y0, x1, y1 = region
+        rect = (x0, y0 + int(20 * k), x0 + int(0.24 * (x1 - x0)), y0 + int(95 * k))
+        lines = [t.strip() for t, b in sorted(self._zoom_ocr(frame, 0, 0, scale=2.5, rect=rect), key=lambda tb: tb[1][1])
+                 if t.strip() and "datapad" not in t]
+        text = _letters(" ".join(lines))
+        is_mission = "missionobject" in text or ("mission" in text and "object" in text) \
+            or any(reads_like(ln, "mission object") for ln in lines)
+        name = " ".join(ln for ln in lines if "object" not in ln and not reads_like(ln, "mission object")).strip()
+        return is_mission, name
+
+    def run(self, state, dry_run: bool = False, max_abort: int = 6, titles=(), probe: bool = False, **_) -> Result:
+        """titles / probe only say there's something to look for (neither: the datapad isn't opened).
+        Every icon that isn't plainly a vehicle or droid is selected (left click, harmless); one
+        whose pane says "Mission Object" is a mission and is aborted. Nothing else is right-clicked
+        (16 Nov: it was right-clicking the R2 unit)."""
+        h = self.settings.raw.get("harness", {})
+        keys = self.runner.keys
+        want = [norm(t) for t in titles if t]
+        if not want and not probe:
+            return Result("ok", "nothing_held", {"aborted": []})
+        if self._ocr() is None:
+            return Result("failed", "no_ocr")
+        out_dir = self._dir()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for f in out_dir.glob("[0-9][0-9]_*"):
+            f.unlink()
+        self._step, self.anomalies = 0, []
+        keys.combo(*h.get("datapad_keys", ["CTRL", "d"]))
+        self.sleep(1.5)
+        aborted, checked, seen = [], [], []
+        try:
+            frame, boxes = self._look("pad")
+            region = datapad_region(boxes, frame.shape)
+            if region is None:
+                self._anomaly("datapad_not_found")
+                return Result("failed", "datapad_not_found", {"aborted": aborted})
+            x0, y0, x1, y1 = region
+            k = frame.shape[0] / 1440
+            sx, sy = frame.shape[1] / 2560, frame.shape[0] / 1440
+            tab = next((b for t, b in boxes if t.strip(" .|/") == "data" and b[1] < y0 + 70 * k), None)
+            keys.click(*(((tab[0] + tab[2]) // 2, (tab[1] + tab[3]) // 2) if tab else (x0 + int(328 * k), y0 + int(34 * k))))
+            self.sleep(0.8)
+            for _ in range(max_abort + 6):
+                frame, boxes = self._look("data_tab")
+                # Marc, 16 Nov: the label under an icon is cut short and reads badly ("Solo Kloo- /
+                # Horn Reco..."), so matching it to the mission's name failed four times running.
+                # Select the icon instead: the pane on the left then shows the full name and,
+                # under it, "Mission Object". That line is what makes it a mission.
+                todo = [ic for ic in self._icons(boxes, region, k) if norm(ic[0]) not in checked]
+                if not todo or len(aborted) >= max_abort:
+                    break
+                label, _, (ix, iy) = todo[0]
+                checked.append(norm(label))
+                keys.click(ix, iy)
+                self.sleep(0.7)
+                frame, _ = self._look("selected")
+                is_mission, name = self._selected(frame, region, k)
+                seen.append((label, name, is_mission))
+                if not is_mission:
+                    continue
+                label = name or label
+                keys.click(ix, iy, "right")
+                self.sleep(0.8)
+                frame, _ = self._look("radial")
+                zoom = self._zoom_ocr(frame, ix, iy)
+                abort = next((b for t, b in zoom if "abort" in t), None)
+                if abort is None:
+                    self._anomaly("abort_not_on_radial", label=label)
+                    keys.press("ESC")                      # not a mission: close the radial, next icon
+                    self.sleep(0.4)
+                    continue
+                if dry_run:
+                    aborted.append(label)
+                    keys.press("ESC")
+                    self.sleep(0.4)
+                    continue
+                keys.click((abort[0] + abort[2]) // 2, (abort[1] + abort[3]) // 2)
+                ask = None
+                for _w in range(4):
+                    self.sleep(0.8)
+                    frame, boxes = self._look("confirm")
+                    ask = find_text(boxes, "remove this mission", "want to remove", "are you sure")
+                    if ask is not None:
+                        break
+                if ask is None:
+                    self._anomaly("abort_no_confirm", label=label)
+                    self._escape()
+                    break
+                keys.click(*confirm_ok_xy(boxes, frame.shape, "remove this mission", "want to remove", "are you sure"))
+                self.sleep(1.2)
+                aborted.append(label)
+                checked.pop()                              # the grid shifts left: look at this spot again
+            if aborted and not dry_run:
+                state.set("missions", [])
+                print(f"[datapad] aborted {len(aborted)} mission(s): {aborted}")
+            if not aborted:
+                print(f"[datapad] no mission found on the Data tab; selected: {seen}")
+            return Result("ok", "dry_run" if dry_run else "", {"aborted": aborted, "checked": checked, "seen": seen})
+        finally:
+            self._close(h)

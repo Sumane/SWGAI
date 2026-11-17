@@ -119,7 +119,7 @@ class TravelTo(Skill):
         if gate is not None and hasattr(gate, "reset"):
             gate.reset()
         f = RouteFollower(self.runner.read_position, self.runner.keys,
-                          turn_rate_deg_s=float(c.get("turn_rate_deg_s", 100.0)),
+                          turn_rate_deg_s=float(c.get("standing_turn_deg_s", c.get("turn_rate_deg_s", 100.0))),   # turns are made standing
                           right_turn_sign=int(c.get("right_turn_sign", -1)),
                           reach_m=2.5, final_reach_m=3.0,
                           should_stop=self.runner.should_stop, sleep=self.sleep, clock=self.clock,

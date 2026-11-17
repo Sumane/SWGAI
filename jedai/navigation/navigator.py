@@ -89,6 +89,9 @@ class Navigator:
         self._track = deque(maxlen=2000)   # where the bot has been (for backtracking)
         self._escape = None                # {"until", "target", "why"} after an unstick
         self._backtracks = 0
+        self._avoid = []                   # off-limits circles for this run (see _avoid_zone)
+        self._bumps = []                   # (x, z, radius, amount) of every failure this run (see _penalise)
+        self._pen_planner = None
         self._pushes = []                  # (pos, heading) each time it got stuck here
         self._stuck_hist = deque(maxlen=200)   # (time, pos, heading) of every stuck
 
@@ -452,6 +455,11 @@ class Navigator:
         c, keys = self.cfg, self.r.keys
         angle = self.steer_angle_deg if angle_deg is None else angle_deg
         rate = float(getattr(self.r, "turn_rate_deg_s", None) or c.get("turn_rate_deg_s", 100.0))
+        if not self.mounted:
+            # 16 Nov: on foot, turning on the spot is ~42 deg/s, not the 100 of turning while
+            # running (measured in the find skill). At 100, every "turn 30 deg" after a bump
+            # came out as about 12, and the bot walked back into the same wall.
+            rate = float(c.get("standing_turn_deg_s", rate))
         keys.key_up("FORWARD")
         keys.tap("RIGHT" if side > 0 else "LEFT", angle / rate)
         if self.heading is not None:            # dead-reckon; movement corrects it
@@ -745,9 +753,22 @@ class Navigator:
                         self.target_wx, self.target_wz = est
                         print(f"   First target guess: ({est[0]:.0f},{est[1]:.0f}) dist={seed_dist}m "
                               f"(±{self.estimator.sigma_m:.0f}m)")
-            self.attempt_cell(seed, origin_pos[0], origin_pos[1], duration=cfg["explore_leg_secs"])
+            if cfg.get("cross_explore_legs", False):
+                self.attempt_cell(seed, origin_pos[0], origin_pos[1], duration=cfg["explore_leg_secs"])
         else:
             print("   Seed move failed — heading unknown, using origin")
+
+        # Marc, 16 Nov: "the forward and backward leg is absolutely frustrating, this can't be
+        # needed anymore". It isn't: the 2 s seed above gives the heading and a first guess, and
+        # the estimator sharpens it from every reading on the way. The legs (20 m out and back,
+        # twice) stay behind a switch, off.
+        if not cfg.get("cross_explore_legs", False):
+            p = self.r.read_position()
+            d = self.r.read_target_distance()
+            if p is not None and d is not None:
+                self.observe_target(p, d, None)
+            print("   Seeded: no exploration legs, estimating on the way.")
+            return self.target_wx, self.target_wz
 
         if self.heading is None:
             print("   No heading — skipping cross, will estimate during navigation")
@@ -806,16 +827,24 @@ class Navigator:
 
         self.observe_target(pos, dist, arrow)
         self._advance_carrot(pos)
+        self._apply_avoid(pos)
+        self._apply_penalties()
 
         if self.state == self.MOVING:
-            if speed_pct < self.cfg["stop_speed_ratio"]:
+            held = now >= self._no_stuck_until
+            if not held:
+                # the runner let go of FORWARD itself (stepping in the last metres, counting
+                # arrival readings): slow isn't a bump, so nothing gets marked (Marc, 16 Nov)
+                self._stop_ticks = 0
+                self._pos_hist.clear()
+            elif speed_pct < self.cfg["stop_speed_ratio"]:
                 self._stop_ticks += 1
                 if self._stop_ticks >= self.cfg["stop_debounce"]:
                     self._stop_ticks = 0
                     return self._enter_recal(pos)
             else:
                 self._stop_ticks = 0
-            if self._grinding(pos):
+            if held and self._grinding(pos):
                 print("\n[NAV] Moving but getting nowhere (grinding along a wall?)")
                 self._mark_grind_wall(self._grind_track)
                 return self._enter_recal(pos)
@@ -830,6 +859,8 @@ class Navigator:
                     return self.steer_toward(pos, *esc["target"])
                 esc = self._escape = None
             if esc is not None and pos is not None:
+                while esc.get("path") and math.hypot(esc["target"][0] - pos[0], esc["target"][1] - pos[1]) <= 8.0:
+                    esc["target"] = esc["path"].pop(0)          # next point back along the track
                 if time.time() < esc["until"] and \
                         math.hypot(esc["target"][0] - pos[0], esc["target"][1] - pos[1]) > 8.0:
                     self.steer_by, self.last_waypoint = esc["why"], esc["target"]
@@ -907,6 +938,13 @@ class Navigator:
             self._ev("heading_override", pos=pos, arrow=arrow, was=self.heading,
                      now=(math.cos(facing), math.sin(facing)), err_deg=abs(math.degrees(err)))
             self._seed_heading((math.cos(facing), math.sin(facing)))
+
+    _no_stuck_until = 0.0
+
+    def hold_stuck(self, secs):
+        """The runner isn't holding FORWARD: don't read slow as stuck for this long."""
+        self._no_stuck_until = max(self._no_stuck_until, time.time() + secs)
+        self._stop_ticks = 0
 
     def _grinding(self, pos, now=None):
         """
@@ -1024,8 +1062,20 @@ class Navigator:
         """
         c, keys = self.cfg, self.r.keys
         n = self._recal_cycles                       # times stuck here before
+        esc = self._escape
+        if esc is not None and esc["why"] == "backtrack" and time.time() < esc["until"] and pos is not None:
+            # bumped something on the way out: step back, face the way out again, carry on
+            keys.stop_movement()
+            keys.key_up("FORWARD")
+            keys.key_down("BACK"); time.sleep(float(c.get("unstick_back_secs", 1.0)) * 0.7); keys.key_up("BACK")
+            here = self.r.read_position() or pos
+            turn = self.steer_toward(here, *esc["target"]) if self.heading is not None else self._unstick_side(here, n)
+            self.pivot(turn or self._unstick_side(here, n), self.steer_angle_deg if turn else 45.0)
+            self._prev_pos = here
+            self.state = self.MOVING
+            return True
         bt = int(c.get("backtrack_after_stuck", 0))
-        if bt and n + 1 >= bt and self._track:
+        if bt and n + 1 >= bt and self._track and self._backtracks < int(c.get("backtrack_max", 3)):
             return self._backtrack(pos)
         side = self._unstick_side(pos, n)
         if c.get("wall_follow", False) and self.heading is not None and pos is not None:
@@ -1214,11 +1264,32 @@ class Navigator:
         # second (a later attempt, after the unstick) makes it a wall
         prev = self.r.db.get_state(self.r.planet, target[0], target[1])
         state = BLOCKED if (prev == SUSPECT or not self.cfg.get("two_strikes", True)) else SUSPECT
+        self._penalise(pos, target)
         if self.mark(target[0], target[1], state, replan_now=True):
             word = "blocked" if state == BLOCKED else "suspect (1st bump)"
             print(f"\n[MAP] Couldn't get into {how} ({target[0]:.0f},{target[1]:.0f}): {word}, D* rerouting")
         elif self.mounted:
             print("\n[MAP] Mounted: blocked cell not recorded (dismount rule)")
+
+    def _penalise(self, pos, target):
+        """
+        Marc, 16 Nov: "the more it tries the more the weight should increase. it can't get stuck
+        in a mindless loop". Each failure here makes the cells round it dearer, wider and heavier
+        the more often it has failed in this place (4 m and +6 the first time; 14 m and +36 by
+        the sixth). D* then finds its own way out: back the way it came, if that's what's left.
+        """
+        n = self._recal_cycles + 1
+        bump = (target[0], target[1], min(2.0 + 2.0 * n, 20.0), 6.0 * n)
+        self._bumps.append(bump)
+        if self.r.planner_active and self._pen_planner is self.r.planner:
+            self.r.planner.add_penalty(*bump)
+
+    def _apply_penalties(self):
+        """A new planner (layer change) starts without them: give it this run's again."""
+        if self.r.planner_active and self._pen_planner is not self.r.planner:
+            self._pen_planner = self.r.planner
+            for bump in self._bumps[-60:]:
+                self.r.planner.add_penalty(*bump)
 
     def _mark_beside(self, px, pz, nx, nz):
         """
@@ -1237,6 +1308,44 @@ class Navigator:
             bx, bz = px + nx * 1.0, pz + nz * 1.0     # most of its own cell is wall-ward
         self.mark(bx, bz, BLOCKED)
 
+    def _avoid_zone(self, origin, need):
+        """
+        Marc, 16 Nov: 26 bumps inside a 6 m box, "failed to get out of a hole". One bump closes
+        one 2 m cell, so D* tries the cell next door, and after walking out it walks straight
+        back in. So when we back out of a pocket, the whole place is put off limits for the rest
+        of this run: a circle round where we kept getting stuck, reaching most of the way (26 m, then 40)
+        but never to where we'll be standing after backing out. It lives in the planner
+        only, not in the saved map: it's "don't go back there now", not "that's a wall".
+        """
+        pts = [p for _, p, _h in self._stuck_hist if math.hypot(p[0] - origin[0], p[1] - origin[1]) <= 15.0] or [origin]
+        cx, cz = sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
+        rad = max(6.0, min(float(self.cfg.get("avoid_max_m", 40.0)), need - 14.0))
+        return {"c": (cx, cz), "r": rad, "on": False}
+
+    def _apply_avoid(self, pos):
+        """Tell the planner about the off-limits circles (again after it has been re-made).
+        A circle only starts to count once we're out of it. Its cells are made dear, not shut:
+        D* goes round when it can and still has a route if we end up inside, or the target is."""
+        if not self._avoid or not self.r.planner_active or pos is None:
+            return
+        goal, step, pl = self._goal_xy, self.cell, self.r.planner
+        for zone in self._avoid:
+            (cx, cz), rad = zone["c"], zone["r"]
+            if not zone["on"]:
+                if math.hypot(pos[0] - cx, pos[1] - cz) < rad + 4.0:
+                    continue
+                zone["on"] = True
+                print(f"\n[MAP] Backed out: ({cx:.0f},{cz:.0f}) and {rad:.0f} m round it are to be avoided "
+                      f"for the rest of this run, D* goes round")
+                self._ev("avoid_zone", centre=(cx, cz), radius=rad)
+            k = int(rad // step) + 1
+            for i in range(-k, k + 1):
+                for j in range(-k, k + 1):
+                    x, z = cx + i * step, cz + j * step
+                    if math.hypot(x - cx, z - cz) > rad:
+                        continue
+                    pl.note_avoid(x, z)
+
     def _backtrack(self, pos):
         """
         Stuck here again and again: it's a pocket. Go back the way it came, far
@@ -1248,12 +1357,26 @@ class Navigator:
         origin = self._recal_origin or pos
         need = float(c.get("backtrack_m", 40.0)) * self._backtracks
         target = None
-        for p in reversed(self._track):
-            if math.hypot(p[0] - origin[0], p[1] - origin[1]) >= need:
-                target = p
+        # 16 Nov: go back ALONG the track (a point every ~6 m), not in a straight line to a point
+        # 40 m back: the straight line out of a pocket is usually through its wall.
+        track = list(self._track)
+        ti = 0                                  # the latest point far enough from the pocket
+        for i in range(len(track) - 1, -1, -1):
+            if math.hypot(track[i][0] - origin[0], track[i][1] - origin[1]) >= need:
+                ti = i
                 break
-        if target is None:
-            target = self._track[0]
+        target = track[ti]
+        # The way there: along what we walked, but not re-walking the milling about inside the
+        # pocket. From where we are, hop to the EARLIEST point of the track within 8 m (that
+        # skips every loop), then on from there, until the target.
+        path, cur, idx = [], (pos or origin), len(track) - 1
+        while idx > ti:
+            j = next((k for k in range(ti, idx) if math.hypot(track[k][0] - cur[0], track[k][1] - cur[1]) <= 8.0),
+                     max(ti, idx - 3))
+            path.append(track[j])
+            cur, idx = track[j], j
+        if not path or path[-1] != target:
+            path.append(target)
         marked = 0
         if not self.mounted:
             for (px, pz), (hx, hz) in self._pushes:
@@ -1267,8 +1390,17 @@ class Navigator:
         keys.stop_movement()
         keys.key_up("FORWARD")
         keys.key_down("BACK"); time.sleep(float(c.get("unstick_back_secs", 1.0))); keys.key_up("BACK")
+        # 16 Nov: the way out is behind us. Steering there while running forward just ground
+        # along the pocket's wall and got stuck again, so the backtrack never left. Turn on the
+        # spot to face the first point back along the track, then go.
+        here = self.r.read_position() or pos
+        if self.heading is not None and here is not None:
+            turn = self.steer_toward(here, path[0][0], path[0][1])
+            if turn:
+                self.pivot(turn, self.steer_angle_deg)
         self._escape = {"until": time.time() + float(c.get("backtrack_secs", 25.0)),
-                        "target": target, "why": "backtrack"}
+                        "target": path[0], "path": path[1:], "why": "backtrack"}
+        self._avoid.append(self._avoid_zone(origin, need))
         self._recal_cycles = 0
         self._recal_origin = None
         self._pushes = []

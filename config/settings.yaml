@@ -72,6 +72,7 @@ navigation:
   remount_max_per_run: 3
   final_creep_dist_on_foot: 0   # on foot: no stop-start creeping at the end
   approach_dist_on_foot: 30     # on foot, closer than this: turn on the spot to the arrow, then step (0 = off)
+  approach_max_detour: 1.4      # ...but only if D*'s route is no more than this x the straight line; else D* keeps driving (16 Nov)
   verify_readings: 5            # consecutive close readings = arrived
   final_creep_dist: 20          # metres: pulse forward instead of holding
   creep_pulse_on: 0.8
@@ -92,11 +93,12 @@ navigation:
   recal_attempt_secs: 3.0       # seconds trying a neighbour cell before marking it blocked
   explore_turn_secs: 1.5
   explore_hold_secs: 2.0
+  cross_explore_legs: false     # 16 Nov: the out-and-back legs at the start are off; seed + estimate on the way
   explore_leg_m: 20.0           # cross-exploration leg length
   explore_leg_secs: 4.0
   cell_size: 2.0                # must match planner.resolution_m
   map_only_when_stuck: true     # 8 Nov: navmesh is the map; record cells only where the bot gets stuck
-  two_strikes: true             # 1st bump in a cell = suspect (dear), 2nd = blocked
+  two_strikes: false            # 16 Nov (Marc): can't get into a cell = that cell is blocked, first time (was: 1st bump suspect, 2nd blocked)
   blame_max_angle_deg: 180      # only blame a cell faced within this angle. 180 = off: the heading comes
                                 # from movement, so it's stale after an unstick turn (sim got worse with 30)
   stop_speed_ratio: 0.10        # below this fraction of max speed = stopped
@@ -114,7 +116,8 @@ navigation:
   wall_follow: false            # stuck: follow the wall (angled into it). OFF: in-game it drove big circles
   follow_angle_deg: 60.0        #   turn this far from facing the wall (90 = parallel)
   follow_secs: 30.0             #   give up following after this long
-  backtrack_after_stuck: 0      # stuck this often in one place: go back the way it came (0 = off)
+  backtrack_after_stuck: 0      # stuck this often in one place: walk back along its track (0 = off: D* does it now, see _penalise)
+  backtrack_max: 3              #   at most this many times a run; after that the usual "trapped" ends it
   backtrack_m: 40.0             #   this far along its track (more each time)
   backtrack_secs: 25.0          #   giving up after this long
   heading_min_move_m: 3.0       # heading from moves at least this long (coords are whole metres)
@@ -168,7 +171,7 @@ planner:
   # has seen. true = Core3 navmesh maps price unexplored cells (comparison runs).
   navmesh_prior: true           # 8 Nov (Marc): navmesh on as the base map
   navmesh_prior_dir: data/navmesh_priors
-  cost_prior_blocked: 30.0      # unexplored cell the navmesh says is not walkable
+  cost_prior_blocked: 500.0     # unexplored cell the navmesh says is mostly not walkable: a wall in all but name (was 30)
   cost_suspect: 15.0            # a cell bumped into once
   resolution_m: 2               # D* / map cell size (was 5: one bump walled off narrow stairs)
   search_radius_m: 150.0        # D* goal ("carrot") at most this far ahead (2 m cells: keep it small)

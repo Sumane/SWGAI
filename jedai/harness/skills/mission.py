@@ -42,6 +42,27 @@ def parse_distance(text: str):
     return (int(m.group(1)), m.group(2)) if m else None
 
 
+def parse_pay_start(text: str):
+    """The payment and start columns, which the OCR often reads as one box (16 Nov):
+    '1073| 1290 to tie sw' -> (1073, 129, 'sw'); '758 | 124m1 to te w' -> (758, 124, 'w');
+    '1335 217m to tie €' -> (1335, 217, 'e'); '1158' -> (1158, None, None). Missing parts are None."""
+    t = text.lower().replace("€", "e").replace("|", " ").replace(",", "").strip()
+    pay = dist = d = None
+    m = re.search(r"\bt[o0]\s*t\w*\s*([nsew]{1,2})?\s*$", t)          # "... to the sw"
+    head = t[:m.start()].strip() if m else t
+    if m:
+        d = m.group(1)
+        # the distance: "<n>m" with the m read as m, or as 0/o, plus maybe a stray character after it
+        dm = re.search(r"(\d+)\s*m\S?$", head) or re.search(r"(\d+)[0o]\S?$", head)
+        if dm:
+            dist = int(dm.group(1))
+            head = head[:dm.start()].strip()
+    pm = re.fullmatch(r"(\d+)", head.strip(" ."))
+    if pm:
+        pay = int(pm.group(1))
+    return pay, dist, d
+
+
 # Layout of the browser at 2560x1440, as offsets from the top-left of its title text
 # (frame 494 of the recording: title at (370, 707)). Used when a button or tab isn't read.
 _BTN = {"refresh": (136, 513), "accept": (414, 513), "details": (686, 513), "exit": (968, 513)}
@@ -102,16 +123,13 @@ def mission_rows(boxes, win):
     for cy in sorted(lines):
         row = {"creator": "", "title": "", "payment": None, "start_m": None, "start_dir": None}
         for t, b in sorted(lines[cy], key=lambda tb: tb[1][0]):
-            dist = parse_distance(t)
-            if dist:
-                row["start_m"], row["start_dir"] = dist
-                lead = re.match(r"\s*(\d+)\s+\d+\s*m", t)               # "116 196m to the sw" read as one box
-                if lead and row["payment"] is None:
-                    row["payment"] = int(lead.group(1))
-            elif b[0] >= x_pay - 40 * k and re.fullmatch(r"[\d,. ]+", t):
-                digits = re.sub(r"\D", "", t)
-                if digits:
-                    row["payment"] = int(digits)
+            if b[0] >= x_pay - 40 * k:
+                # payment and/or start, often one box: "1073| 1290 to tie sw"
+                pay, dist, d = parse_pay_start(t)
+                if pay is not None and row["payment"] is None:
+                    row["payment"] = pay
+                if dist is not None:
+                    row["start_m"], row["start_dir"] = dist, d
             elif b[0] < x_title - 10 * k:
                 row["creator"] = (row["creator"] + " " + t).strip()
             elif b[0] < x_pay:
@@ -126,16 +144,28 @@ def detail_window(boxes, frame_h: int = 1440):
     """The Mission Details window -> {"fields": {...}, "accept": (x, y), "close": (x, y), "anchor": box} or None.
     Labels run down the left ("Item:", "Start:", "Destination:", ...), each value on the line below."""
     k = frame_h / 1440
-    dest = next((b for t, b in boxes if t.strip(" .:;") == "destination"), None)
-    if dest is None:
+    # 16 Nov: the labels read as "destna", "creatora", "remane", "ttena": match on how they start
+    def label(t):
+        s = t.strip(" .:;,").lower()
+        if len(s) > 13:
+            return None
+        for name, starts in (("destination", ("dest",)), ("start", ("start", "stan")), ("creator", ("creat",)),
+                             ("reward", ("rew", "rema")), ("difficulty", ("diff",)), ("item", ("item", "ttem", "ltem"))):
+            if s.startswith(starts):
+                return name
+        return None
+    found = [(label(t), b) for t, b in boxes if label(t)]
+    anchor = next((b for n, b in found if n in ("start", "difficulty", "destination")), None)
+    if anchor is None:
         return None
     labels = {}
-    for t, b in boxes:
-        s = t.strip(" .:;")
-        if s in ("item", "start", "destination", "creator", "reward", "difficulty") and abs(b[0] - dest[0]) < 40 * k:
-            labels[s] = b
-    if "reward" not in labels and "start" not in labels:
+    for n, b in found:
+        if abs(b[0] - anchor[0]) < 40 * k and n not in labels:
+            labels[n] = b
+    if len(labels) < 3:
         return None
+    dest = labels.get("destination") or (anchor[0], labels["start"][1] + int(56 * k), anchor[2],
+                                          labels["start"][3] + int(56 * k)) if "start" in labels else anchor
     fields = {}
     for name, lb in labels.items():
         best = None
@@ -160,9 +190,9 @@ def detail_window(boxes, frame_h: int = 1440):
             elif s == "close":
                 out["close"] = _centre(b)
     for key in ("start", "destination"):
-        d = parse_distance(fields.get(key, ""))
-        if d:
-            out[key + "_m"], out[key + "_dir"] = d
+        _, dist, d = parse_pay_start(fields.get(key, ""))      # "153m to the" (direction lost) still gives 153
+        if dist is not None:
+            out[key + "_m"], out[key + "_dir"] = dist, d
     m = re.search(r"(\d[\d,]*)", fields.get("reward", ""))
     if m:
         out["reward"] = int(m.group(1).replace(",", ""))
@@ -301,6 +331,9 @@ class TakeMission(Skill):
             self.sleep(1.0)
             frame, boxes = self._look("list")
             win = browser_window(boxes, frame.shape[0])
+            if find_text(boxes, "too far away") is not None:
+                self._too_far = True               # the game's own words: the list will stay empty
+                return frame, boxes, win, []
             if win and find_text(boxes, "downloading available") is None:
                 boxes, win, rows = self._read_list(frame, boxes, win)
                 if rows:
@@ -314,6 +347,7 @@ class TakeMission(Skill):
         if self._ocr() is None:
             return Result("failed", "no_ocr")
         self._run, self._step, self.anomalies = None, 0, []
+        self._too_far = False
         prefer = prefer or h.get("mission_prefer", "short")
         keys.release_all()
         opened = self._open_browser(h)
@@ -323,7 +357,7 @@ class TakeMission(Skill):
         keys.click(*win["tabs"]["deliver"])
         frame, boxes, win, rows = self._wait_list()
         if not rows:
-            return self._fail("no_missions_read")
+            return self._fail("terminal_too_far" if getattr(self, "_too_far", False) else "no_missions_read")
         pick = choose(rows, prefer, h.get("mission_max_payment"), int(h.get("mission_min_payment", 0)))
         listing = [{k: r[k] for k in ("creator", "title", "payment", "start_m", "start_dir")} for r in rows]
         for r in listing:
@@ -368,8 +402,19 @@ class TakeMission(Skill):
                 keys.click(*pick["click"])
                 self.sleep(0.4)
             keys.click(*win["buttons"]["accept"])
+        self.sleep(1.0)
+        # 16 Nov: "Are you sure you want to accept this mission?" [Cancel] [OK] - it wasn't
+        # answered, so nothing was taken. Marc's recording: OK ~70 px right of the question's middle.
+        frame, boxes = self._look("confirm")
+        ask = find_text(boxes, "are you sure", "accept this mission", "want to accept")
+        if ask is None:
+            return self._fail("no_accept_confirm", mission=mission)
+        from .datapad import confirm_ok_xy
+        keys.click(*confirm_ok_xy(boxes, frame.shape, "are you sure", "accept this mission", "want to accept"))
         self.sleep(1.5)
         frame, boxes = self._look("after_accept")
+        if find_text(boxes, "are you sure", "accept this mission") is not None:
+            return self._fail("accept_confirm_still_open", mission=mission)
         if detail_window(boxes, frame.shape[0]) is not None:
             return self._fail("details_still_open_after_accept", mission=mission)
         # proof: the mission we took is no longer offered
