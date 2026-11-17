@@ -252,7 +252,7 @@ def test_mount_dismount():
 
 def test_registry():
     reg = default_registry(FakeRunner(), WorldState(":memory:"), FakeSettings())
-    assert reg.names() == ["abort_missions", "clean_waypoints", "close_in", "dismount", "find_nearest", "follow_waypoint", "mission_npc", "mount", "navigate_to", "recover_from_death", "take_mission", "travel_to"]
+    assert reg.names() == ["abort_missions", "clean_waypoints", "close_in", "dismount", "find_nearest", "follow_waypoint", "level_route", "mission_npc", "mount", "navigate_to", "recover_from_death", "take_mission", "travel_to"]
     with pytest.raises(ValueError):
         reg.register(Mount(None, None))
     with pytest.raises(KeyError):
@@ -1851,7 +1851,11 @@ def test_close_in_walks_the_last_metres_by_the_arrow_alone(tmp_path, monkeypatch
     skill.runner.hud.waypoints = staticmethod(lambda frame, stop: [Row()])
     res = skill.run(WorldState(":memory:"), title="blaster schematics", stop_m=5.0)
     assert res.ok, (res.reason, (world.x, world.z), res.data.get("log", [])[-3:])
-    assert math.hypot(world.x - target[0], world.z - target[1]) <= 6.0, (world.x, world.z)
+    # 17 Nov: "near" (two short readings) hands over to the talk step, which /tar's and /follows
+    # the NPC the rest of the way, so it only has to be within targeting range. The digit model
+    # dropping a digit (13 -> 3) can end it a little early; that's what /follow is for.
+    limit = 15.0 if res.reason == "near" else 6.0
+    assert math.hypot(world.x - target[0], world.z - target[1]) <= limit, (res.reason, world.x, world.z)
     assert len(world.taps) < 120
 
 
@@ -1874,6 +1878,77 @@ def test_chain_hands_back_to_the_navigator_when_close_in_cant_get_round(tmp_path
     res = chain._mission_leg("blaster schematics", {}, "pickup", 1500.0)
     assert res.ok and [c[0] for c in calls] == ["follow_waypoint", "close_in", "follow_waypoint", "close_in", "mission_npc"]
     assert calls[0][1]["stop"] == 10.0
+
+
+def test_chain_goes_round_by_the_navmesh_when_the_npc_is_on_another_level(tmp_path):
+    """17 Nov: beside the waypoint on the flat, the NPC 2 m up on a terrace: the talk fails,
+    level_route walks round to his level, then the talk again."""
+    chain, calls, s = _chain_rig(tmp_path, pos=(-5104, 4142))
+    from jedai.harness.skill import Result as R
+    n = {"npc": 0}
+    class Follow(Skill):
+        name = "follow_waypoint"
+        def run(self, state, **a):
+            calls.append(("follow_waypoint", a)); return R("ok", "", {"target": (-5620.0, 4710.0)})
+    class Npc(Skill):
+        name = "mission_npc"
+        def panel_dist(self, title, reads=3): return 60
+        def run(self, state, **a):
+            calls.append(("mission_npc", a)); n["npc"] += 1
+            return R("failed", "npc_not_talked") if n["npc"] == 1 else R("ok", "delivered")
+    class Close(Skill):
+        name = "close_in"
+        def run(self, state, **a):
+            calls.append(("close_in", a)); return R("ok", "beside_it")
+    class Level(Skill):
+        name = "level_route"
+        def run(self, state, **a):
+            calls.append(("level_route", a)); return R("ok", "")
+    chain.registry._skills.pop("follow_waypoint", None)
+    for k in (Follow(), Npc(), Close(), Level()):
+        chain.registry.register(k)
+    res = chain._mission_leg("important policy speech", {}, "destination", 1500.0)
+    assert res.ok and [c[0] for c in calls] == ["follow_waypoint", "close_in", "mission_npc", "level_route", "mission_npc"]
+    assert calls[3][1]["goal"] == (-5620.0, 4710.0)
+
+
+def test_chain_falls_back_to_dstar_when_something_blocks_the_npc(tmp_path):
+    """17 Nov (Marc): a wall between us and the NPC on the same level: the navmesh has no other
+    level to go to, so D* to his spot, on foot, then talk again."""
+    chain, calls, s = _chain_rig(tmp_path, pos=(-5104, 4142))
+    from jedai.harness.skill import Result as R
+    n = {"npc": 0}
+    class Follow(Skill):
+        name = "follow_waypoint"
+        def run(self, state, **a):
+            calls.append(("follow_waypoint", a)); return R("ok", "", {"target": (-5620.0, 4710.0)})
+    class Npc(Skill):
+        name = "mission_npc"
+        def panel_dist(self, title, reads=3): return 60
+        def run(self, state, **a):
+            calls.append(("mission_npc", a)); n["npc"] += 1
+            return R("failed", "npc_not_talked") if n["npc"] == 1 else R("ok", "delivered")
+    class Close(Skill):
+        name = "close_in"
+        def run(self, state, **a):
+            calls.append(("close_in", a)); return R("ok", "beside_it")
+    class Level(Skill):
+        name = "level_route"
+        def run(self, state, **a):
+            calls.append(("level_route", a)); return R("failed", "same_level")
+    class Nav(Skill):
+        name = "navigate_to"
+        def run(self, state, **a):
+            calls.append(("navigate_to", a)); return R("ok", "")
+    for k in ("follow_waypoint", "navigate_to"):
+        chain.registry._skills.pop(k, None)
+    for k in (Follow(), Npc(), Close(), Level(), Nav()):
+        chain.registry.register(k)
+    res = chain._mission_leg("important policy speech", {}, "destination", 1500.0)
+    assert res.ok, res
+    assert [c[0] for c in calls] == ["follow_waypoint", "close_in", "mission_npc", "level_route", "navigate_to", "mission_npc"]
+    nav = calls[4][1]
+    assert (nav["x"], nav["z"], nav["stop"]) == (-5620.0, 4710.0, 3.0)
 
 
 def test_start_aborts_a_leftover_mission_before_cleaning_waypoints(tmp_path):

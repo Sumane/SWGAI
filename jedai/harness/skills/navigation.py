@@ -121,6 +121,10 @@ class FollowWaypoint(Skill):
         if pos is not None:
             state.set_position(self.settings.planet, pos[0], pos[1])
         data = {"outcome": outcome}
+        nav = getattr(self.runner, "navigator", None)
+        tx, tz = getattr(nav, "target_wx", None), getattr(nav, "target_wz", None)
+        if tx is not None and tz is not None:
+            data["target"] = (float(tx), float(tz))      # the navigator's estimate of the waypoint
         if outcome == "arrived":
             return Result("ok", "", data)
         if outcome in ("dead", "no_waypoint", "lost_waypoint") or outcome.startswith("crashed"):

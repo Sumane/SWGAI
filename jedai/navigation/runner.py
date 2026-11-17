@@ -893,6 +893,23 @@ class NavigationRunner:
             if self._stop_override is not None:
                 stop = self._stop_override
             creep = c.get("final_creep_dist_on_foot", 0) if not self.mounted else c["final_creep_dist"]
+            # 17 Nov (Marc): it rode the last 50 m on the swoop, overshot the NPC and circled at
+            # 16 m/s. When asked to get closer than a vehicle can stop, get off near the target
+            # and do the rest on foot. Two readings in a row, so one misread digit doesn't do it.
+            near = c.get("dismount_near_m", 50)
+            if self.mounted and stop < c["stop_dist"] and near and dist <= near:
+                self._near_reads = getattr(self, "_near_reads", 0) + 1
+                if self._near_reads >= 2:
+                    self._near_reads = 0
+                    print(f"\n[NAV] {dist:.0f} m to go: off the vehicle, the last stretch on foot")
+                    self.rec.event("dismount_near_target", dist=dist)
+                    k.key_up("FORWARD")
+                    self.dismount()
+                    k.key_down("FORWARD")
+                    nav.hold_stuck(3.0)
+                    continue
+            else:
+                self._near_reads = 0
             # Final approach on foot: stop-and-go by the arrow. At ~2 s per
             # decision a runner overshoots a 10 m circle and orbits it; this
             # turns on the spot until the arrow says N, then steps forward.

@@ -387,12 +387,14 @@ class Chain:
         # something, the navigator has one more go from where we are, then close_in again.
         near = 10.0
         h = self.settings.raw.get("harness", {})
+        target = None
         for attempt in range(2):
             if d > near + 4 or attempt:
                 if d > 150 and h.get("mount_key") and not self.state.get("mounted", False):
                     self.step("mount", f"{d} m to go")
                 res = self.step("follow_waypoint", f"'{title}' ({leg}), {d} m" + (" (again: close_in was blocked)" if attempt else ""),
                                 expect=None if attempt else d, label=title, stop=near)
+                target = res.data.get("target") or target
                 if not res.ok:
                     return res
             if self.state.get("mounted", False) and "dismount" in self.registry.names():
@@ -404,7 +406,28 @@ class Chain:
                 break
             if res.reason != "blocked" or attempt:
                 return res
-        return self.step("mission_npc", f"talk to the {leg} NPC", title=title)
+        res = self.step("mission_npc", f"talk to the {leg} NPC", title=title)
+        if res.ok or res.reason != "npc_not_talked" or target is None:
+            return res
+        # 17 Nov (Marc): "something is blocking us from following or reaching the target: revert
+        # to D*". Couldn't talk to him from beside the waypoint = there's something between us
+        # (a wall, a terrace edge, a railing), whatever it is. If the navmesh shows he's on another
+        # level, its route round to his level is the quick way; otherwise, or if that walk fails,
+        # D* to his exact spot, on foot, marking whatever it bumps, then talk again.
+        lvl = None
+        if "level_route" in self.registry.names():
+            lvl = self.step("level_route", f"the {leg} NPC may be on another level: go round by the navmesh", goal=target)
+            if lvl.ok:
+                again = self.step("mission_npc", f"talk to the {leg} NPC, from his level", title=title)
+                if again.ok:
+                    return again
+        if self.state.get("mounted", False) and "dismount" in self.registry.names():
+            self.step("dismount", "D* to the NPC on foot")
+        nv = self.step("navigate_to", f"something between us and the {leg} NPC: D* to his spot "
+                       f"({target[0]:.0f}, {target[1]:.0f})", x=target[0], z=target[1], label="route_npc", stop=3.0)
+        if not nv.ok:
+            return nv
+        return self.step("mission_npc", f"talk to the {leg} NPC again, after D*", title=title)
 
     _COMPASS = {"n": (0, 1), "ne": (0.7071, 0.7071), "e": (1, 0), "se": (0.7071, -0.7071),
                 "s": (0, -1), "sw": (-0.7071, -0.7071), "w": (-1, 0), "nw": (-0.7071, 0.7071)}

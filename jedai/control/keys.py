@@ -45,8 +45,10 @@ class KeyClient:
         self.send(payload)
 
     def tap(self, key: str, duration: float = 0.0):
-        self.send({"cmd": "TAP", "key": key, "duration": duration})
-        time.sleep(duration + 0.05)
+        # the controller acknowledges after it lets go, so a turn held for 2+ s used to print
+        # "No acknowledgement ... Is the controller running?" every time (17 Nov)
+        self.send({"cmd": "TAP", "key": key, "duration": duration}, timeout=self.ack_timeout + duration)
+        time.sleep(0.05)
 
     def tap_multi(self, keys, duration: float = 0.05):
         """Hold several keys together, e.g. ["ctrl", "h"]."""

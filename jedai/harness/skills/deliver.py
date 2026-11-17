@@ -124,7 +124,9 @@ class MissionNpc(FindNearest):
             return got
         return None
 
-    def run(self, state, title: str = "", reach_m: float = 8.0, tries: int = 6, **_) -> Result:
+    def run(self, state, title: str = "", reach_m: float = 20.0, tries: int = 6, **_) -> Result:
+        # reach_m 8 -> 20 (17 Nov): /follow walks us up to whoever we target, so they only have
+        # to be targetable, not already in talking range
         if self._ocr() is None:
             return Result("failed", "no_ocr")
         self._step, self.anomalies = 0, []
@@ -277,9 +279,45 @@ class CloseIn(MissionNpc):
         self.sleep(0.4)
         new = self.runner.read_position()
         moved = math.hypot(new[0] - pos[0], new[1] - pos[1]) if pos and new else metres
+        if moved < 0.8 and pos:
+            # 17 Nov (Marc): "the way was clear". A short tap barely gets going (inertia) and the
+            # coordinates lag and are whole metres, so a real step can read as no step. Look
+            # again after a moment before believing it.
+            self.sleep(0.8)
+            later = self.runner.read_position()
+            if later:
+                new = later
+                moved = math.hypot(new[0] - pos[0], new[1] - pos[1])
         return (new or pos), moved
 
-    def run(self, state, title: str = "", stop_m: float = 5.0, max_steps: int = 40, start_m: float | None = None, **_) -> Result:
+    def _really_blocked(self, pos):
+        """A step read as no movement: try once more, longer. Only no movement twice is a wall."""
+        pos2, moved = self._step_fwd(3.0, pos)
+        return pos2, moved < 0.8
+
+    def run(self, state, **kw) -> Result:
+        """
+        Marc, 17 Nov: the panel's arrow is relative to the CAMERA, not the character. From
+        behind, a waypoint we're standing on or have walked past is still "ahead" (40 steps of
+        "N" round the NPC). In first person the camera is where we are, so the arrow is true.
+        Zoom all the way in for the close-in, back out after, whatever happens.
+        """
+        h = self.settings.raw.get("harness", {})
+        zin, zout = float(h.get("first_person_zoom_in_s", 3.0)), float(h.get("third_person_zoom_out_s", 1.5))
+        km = self.settings.raw.get("keys", {})
+        cam = bool(km.get("ZOOM_IN")) and bool(km.get("ZOOM_OUT")) and zin > 0
+        if cam:
+            self.runner.keys.tap("ZOOM_IN", zin)          # held past "close": clamps at 1st person
+            self.sleep(0.4)
+        try:
+            return self._close_in(state, **kw)
+        finally:
+            if cam:
+                self.runner.keys.tap("ZOOM_OUT", zout)
+                self.sleep(0.3)
+
+    def _close_in(self, state, title: str = "", stop_m: float = 5.0, max_steps: int = 40, start_m: float | None = None,
+                  near_m: float = 8.0, **_) -> Result:
         keys = self.runner.keys
         keys.release_all()
         self._step, self.anomalies, self._side = 0, [], 1
@@ -321,8 +359,19 @@ class CloseIn(MissionNpc):
             if est is not None and est <= stop_m:
                 print(f"[close] there: {est:.0f} m from '{title}' after {step} steps")
                 return Result("ok", "", {"dist": est, "steps": step, "pos": pos, "log": log})
+            # 17 Nov: it read 2 m on its first step and then walked about for 39 more, because
+            # single digits on their own aren't believed. Two short readings in a row are: from
+            # there the talk step (/tar, /follow) does the rest, and the game says if it's too far.
+            short = [e["raw"] for e in log[-2:] if e["raw"] is not None and e["raw"] <= near_m]
+            if len(short) == 2:
+                print(f"[close] there: read {short[0]} then {short[1]} m from '{title}' after {step} steps")
+                return Result("ok", "near", {"dist": short[-1], "steps": step, "pos": pos, "log": log})
             want = 3.0 if est is None else min(6.0, max(1.5, 0.5 * est))
             pos, moved = self._step_fwd(want, pos)
+            if moved < 0.8:
+                pos, shut = self._really_blocked(pos)
+                if not shut:
+                    moved = 1.0
             since += moved
             was_ahead = arrow in self._AHEAD and moved >= 0.8
             if moved >= 0.8:
@@ -344,3 +393,53 @@ class CloseIn(MissionNpc):
             print(f"[close] blocked ({blocked}): went {m1:.0f} m along it to the {'right' if way > 0 else 'left'}")
         self._anomaly("close_in_too_many_steps", title=title, log=log[-8:])
         return Result("failed", "too_many_steps", {"log": log, "pos": pos, "anomalies": self.anomalies})
+
+
+class LevelRoute(FindNearest):
+    """
+    Marc, 17 Nov: the delivery NPC stood on a terrace, the bot at the foot of its wall 2 m
+    below, 5 m away on the flat. Every check said "arrived", /follow pressed us into the wall,
+    the talk did nothing. The bot's own map is flat; the navmesh isn't: its polygons keep their
+    heights and how they link. Plan over them from the surface we stand on (our height from the
+    HUD) to the other level at the goal, and walk that, round to the steps.
+    """
+    name = "level_route"
+    _meshes = {}
+
+    def _index(self):
+        from ...navigation.navmesh import MeshIndex
+        folder = self.settings.raw.get("paths", {}).get("navmesh_dir", "")
+        key = (folder, self.settings.planet)
+        if key not in LevelRoute._meshes:
+            LevelRoute._meshes[key] = MeshIndex(folder, self.settings.planet)
+        return LevelRoute._meshes[key]
+
+    def run(self, state, goal=None, other_level: bool = True, dry_run: bool = False, **_) -> Result:
+        from ...navigation import navmesh as N
+        from ...navigation.route import simplify
+        self._step, self.anomalies = 0, []
+        if goal is None:
+            return Result("failed", "no_goal")
+        pos = self.runner.read_position()
+        height = (getattr(self.runner, "player", (None, None, None)) or (None, None, None))[1]
+        if pos is None:
+            return Result("failed", "no_position")
+        nm = self._index().at(pos[0], pos[1])
+        if nm is None:
+            return Result("failed", "no_navmesh", {"pos": pos})
+        pts, info = N.route(nm, (pos[0], pos[1], height), tuple(goal), other_level=other_level)
+        data = {"pos": pos, "height": height, "goal": tuple(goal), "mesh": nm.name, **info}
+        print(f"[level] from ({pos[0]:.0f}, {pos[1]:.0f}) height {height} to ({goal[0]:.0f}, {goal[1]:.0f}): "
+              + (f"{info['length']} m over {info['polys']} polys, up/down to height {info['goal_h']}" if pts else info.get("why", "?")))
+        if pts is None:
+            return Result("failed", "same_level" if "another level" in info.get("why", "") else "no_route", data)
+        route = simplify(pts[1:], min_gap_m=4.0)
+        data["route"] = [(round(x), round(z)) for x, z in route]
+        if dry_run:
+            return Result("ok", "dry_run", data)
+        outcome, winfo = self._walk(route, f"round to the other level ({info['length']} m)")
+        data.update(outcome=outcome, walk=winfo)
+        if outcome == "arrived":
+            return Result("ok", "", data)
+        self._anomaly("level_route_" + outcome, **{k: v for k, v in data.items() if k != "walk"})
+        return Result("stuck", outcome, data)

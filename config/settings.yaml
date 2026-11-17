@@ -18,6 +18,7 @@ paths:
   debug_dir: data/debug_logs
   harness_dir: data/harness     # harness world state + skill logs
   vehicles: config/vehicles.json      # vehicle speed calibration (speedometer writes here)
+  navmesh_dir: /mnt/storage/SWGEMU_bot/navmeshes   # the raw Core3 navmesh dumps: level_route plans over them (17 Nov)
 
 screen:
   monitor_index: 2              # which monitor the game is on (mss numbering, 1 = primary)
@@ -51,6 +52,8 @@ keys:
   AUTORUN: numlock
   FORWARD: up
   BACK: down
+  ZOOM_IN: add                  # numpad +: held, the camera zooms in (far -> close -> 1st person)
+  ZOOM_OUT: subtract            # numpad -
   kill: f8                      # stops both navigator and controller
 
 navigation:
@@ -68,6 +71,7 @@ navigation:
   stop_dist_on_foot: 10         # metres: arrived when walking/running
   remount_after_m: 40           # after a stuck-dismount, get back on once this far from the spot
   remount_min_dist: 150         # ...unless the target is closer than this (walk the rest)
+  dismount_near_m: 50           # 17 Nov: asked to stop closer than stop_dist, get off within this of the target (0 = off)
   remount_progress_m: 30        # ...and only once it's this much closer to the target (past the obstacle)
   remount_max_per_run: 3
   final_creep_dist_on_foot: 0   # on foot: no stop-start creeping at the end
@@ -202,6 +206,8 @@ harness:
   # The client's chat log (/logChat, switched on at the start of each session).
   # Read directly instead of OCR'ing the chat window. Newest match = current character.
   chatlog_glob: "/mnt/storage/Swgemu/profiles/*/Core3/*_chatlog.txt"
+  first_person_zoom_in_s: 3.0                    # close_in: hold ZOOM_IN this long = 1st person (17 Nov)
+  third_person_zoom_out_s: 1.5                   #   and ZOOM_OUT this long after, back to the usual view (tune to taste)
   datapad_keys: [CTRL, d]                        # opens/closes the datapad (Marc's binding)
   bot_waypoint_prefixes: [badge_, route_, bot_]  # clean_waypoints only deletes these
   chatlog_watch: true          # keep /logChat ON: checked in the chat window at start and between steps

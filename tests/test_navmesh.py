@@ -85,3 +85,36 @@ def test_dstar_prior_steers_round_unwalkable(tmp_path):
     around = plan(wall)
     assert any(10 <= x < 30 and abs(z) < 5 for x, z in straight)
     assert not any(10 <= x < 30 and -40 <= z < 40 for x, z in around)
+
+
+def _terrace(tmp_path):
+    """Ground at height 0 west and north of a terrace at height 3 (x 20..40, y 0..20). The only
+    way up is a ramp at its north-east corner (x 30..40, y 20..30)."""
+    verts = [(0, 0, 0), (20, 0, 0), (20, 20, 0), (0, 20, 0),                 # 0-3 ground G0
+             (20, 0, 3), (40, 0, 3), (40, 20, 3), (20, 20, 3), (30, 20, 3),   # 4-8 terrace T
+             (30, 20, 0), (30, 30, 0), (0, 30, 0), (40, 30, 0)]               # 9-12 ground G1, ramp
+    polys = [([0, 1, 2, 3], [0, 0, 3, 0]),             # G0: north edge -> G1
+             ([4, 5, 6, 8, 7], [0, 0, 4, 0, 0]),       # T: edge 6->8 -> ramp
+             ([3, 2, 9, 10, 11], [1, 0, 4, 0, 0]),     # G1: -> G0, -> ramp
+             ([8, 6, 12, 10], [2, 0, 0, 3])]           # ramp: -> T, -> G1
+    p = tmp_path / "naboo_city_terrace"
+    _write(p, verts, polys)
+    return N.load(str(p))
+
+
+def test_route_goes_round_to_the_ramp_for_a_target_on_a_terrace(tmp_path):
+    """17 Nov: the delivery NPC was on a terrace 2 m above the bot, 5 m away across its wall."""
+    nm = _terrace(tmp_path)
+    pts, info = N.route(nm, (18.0, 10.0, 0.0), (25.0, 10.0), other_level=True)
+    assert pts is not None, info
+    assert info["goal_h"] == 3.0 and info["start_h"] == 0.0
+    assert max(y for _x, y in pts) > 20 and max(x for x, _y in pts) > 30      # out north, up the ramp
+    assert info["length"] > 30                                                  # not the 7 m through the wall
+
+
+def test_route_other_level_refuses_a_target_on_our_own_level(tmp_path):
+    nm = _terrace(tmp_path)
+    pts, info = N.route(nm, (5.0, 25.0, 0.0), (10.0, 10.0), other_level=True)
+    assert pts is None and "another level" in info["why"]
+    pts, info = N.route(nm, (5.0, 25.0, 0.0), (10.0, 10.0))
+    assert pts is not None and info["length"] < 20

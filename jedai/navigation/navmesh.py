@@ -52,6 +52,7 @@ class NavMesh:
     walkable_climb: float = 0.0
     component: np.ndarray | None = None             # connected-component id per poly
     main: int = -1                                  # id of the biggest (ground) component
+    adj: list = field(default_factory=list)         # per poly: {neighbour index: portal midpoint (x, y, h)}
 
     def ground_polys(self):
         """Polys connected to the main ground mesh (drops rooftops and other islands)."""
@@ -63,7 +64,7 @@ def _area(p) -> float:
     return abs(np.dot(x, np.roll(y, 1)) - np.dot(y, np.roll(x, 1))) / 2
 
 
-def _components(polys, links):
+def _components(polys, links, portals=None):
     """
     Union polys that share an edge. Inside a tile Detour stores the neighbour
     index; across tiles it only flags "external", so external edges are matched
@@ -83,16 +84,19 @@ def _components(polys, links):
         for e, nv in enumerate(neis):
             if nv == 0:
                 continue
+            a, c = pts[e], pts[(e + 1) % len(pts)]
             if nv & 0x8000:
-                a, c = pts[e], pts[(e + 1) % len(pts)]
                 if abs(a[0] - c[0]) < 1e-3:
                     key, lo, hi = ("x", round(a[0], 1)), *sorted((a[1], c[1]))
                 else:
                     key, lo, hi = ("y", round(a[1], 1)), *sorted((a[0], c[0]))
                 ext.setdefault(key, []).append((lo, hi, (a[2] + c[2]) / 2, k))
             else:
-                par[find(k)] = find(base + nv - 1)
-    for edges in ext.values():
+                j = base + nv - 1
+                par[find(k)] = find(j)
+                if portals is not None:
+                    portals.setdefault(k, {})[j] = tuple((a + c) / 2)
+    for (axis, at), edges in ext.items():
         edges.sort()
         for i, (lo, hi, z, k) in enumerate(edges):
             for lo2, hi2, z2, k2 in edges[i + 1:]:
@@ -100,6 +104,11 @@ def _components(polys, links):
                     break
                 if abs(z - z2) < 2.0 and min(hi, hi2) - max(lo, lo2) > 0.05:
                     par[find(k)] = find(k2)
+                    if portals is not None:
+                        m = (max(lo, lo2) + min(hi, hi2)) / 2
+                        mid = (at, m, (z + z2) / 2) if axis == "x" else (m, at, (z + z2) / 2)
+                        portals.setdefault(k, {})[k2] = mid
+                        portals.setdefault(k2, {})[k] = mid
     return np.array([find(k) for k in range(len(polys))])
 
 
@@ -143,10 +152,13 @@ def load(path: str) -> NavMesh:
                 ys += [pts[:, 1].min(), pts[:, 1].max()]
     if xs:
         nm.bmin, nm.bmax = (min(xs), min(ys)), (max(xs), max(ys))
-    comp = _components(nm.polys, links)
+    portals = {}
+    comp = _components(nm.polys, links, portals)
     keep = [i for i, (neis, _b) in enumerate(links) if neis != ()]
+    new = {old: n for n, old in enumerate(keep)}
     nm.polys = [nm.polys[i] for i in keep]
     nm.component = comp[keep]
+    nm.adj = [{new[j]: mid for j, mid in portals.get(old, {}).items() if j in new} for old in keep]
     area = {}
     for p, c in zip(nm.polys, nm.component):
         area[c] = area.get(c, 0.0) + _area(p)
@@ -269,4 +281,122 @@ class PriorIndex:
             f = cm.fraction(wx, wz)
             if f is not None:
                 return f
+        return None
+
+
+# -- routing on the navmesh itself, levels included (17 Nov) ---------------------------------
+#
+# The cell maps above are flat: a terrace and the grass under its wall are the same cell, so
+# the bot stood 5 m from a delivery NPC, 2 m below him, and every check said "arrived" (Marc,
+# 17 Nov). The polygons keep their heights and their links, so a path over them goes round to
+# the steps.
+
+def _inside(pts, x, y) -> bool:
+    n, ok = len(pts), False
+    for i in range(n):
+        x1, y1 = pts[i][0], pts[i][1]
+        x2, y2 = pts[(i + 1) % n][0], pts[(i + 1) % n][1]
+        if (y1 > y) != (y2 > y) and x < (x2 - x1) * (y - y1) / (y2 - y1) + x1:
+            ok = not ok
+    return ok
+
+
+def _height_at(pts, x, y) -> float:
+    return float(np.mean(pts[:, 2]))
+
+
+def polys_at(nm: NavMesh, x: float, y: float, near_m: float = 0.0):
+    """Indices of polys containing (x, y); failing that, those within near_m of it."""
+    hit = [k for k, p in enumerate(nm.polys)
+           if p[:, 0].min() <= x <= p[:, 0].max() and p[:, 1].min() <= y <= p[:, 1].max() and _inside(p, x, y)]
+    if hit or near_m <= 0:
+        return hit
+    out = []
+    for k, p in enumerate(nm.polys):
+        c = p[:, :2].mean(axis=0)
+        if math.hypot(c[0] - x, c[1] - y) <= near_m + float(np.max(np.hypot(p[:, 0] - c[0], p[:, 1] - c[1]))):
+            out.append(k)
+    return out
+
+
+def route(nm: NavMesh, start, goal, other_level: bool = False, climb: float | None = None):
+    """
+    start: (x, y, height) - where we stand, height from the HUD. goal: (x, y), height unknown
+    (a /waypoint on a target reads height 0). other_level=True: of the surfaces at the goal,
+    take the one furthest in height from ours (we're at its foot and it isn't reachable from
+    here). Returns ([(x, y), ...], info) or (None, info).
+    """
+    import heapq
+    climb = float(climb if climb is not None else max(nm.walkable_climb, 1.0))
+    sx, sy, sh = start
+    gx, gy = goal
+    cand = polys_at(nm, sx, sy, near_m=3.0)
+    if sh is not None:
+        cand = sorted(cand, key=lambda k: abs(_height_at(nm.polys[k], sx, sy) - sh))
+    if not cand:
+        return None, {"why": "not on the navmesh here"}
+    s = cand[0]
+    goals = polys_at(nm, gx, gy, near_m=2.0)
+    if not goals:
+        return None, {"why": "no surface at the goal"}
+    h0 = _height_at(nm.polys[s], sx, sy)
+    goals = sorted(goals, key=lambda k: abs(_height_at(nm.polys[k], gx, gy) - h0), reverse=other_level)
+    info = {"start_poly": s, "start_h": round(h0, 1)}
+    for g in goals:
+        gh = _height_at(nm.polys[g], gx, gy)
+        if other_level and abs(gh - h0) <= climb:
+            continue                             # same level as us: that's not the way
+        cen = [p[:, :2].mean(axis=0) for p in nm.polys]
+        dist = {s: 0.0}
+        prev = {}
+        heap = [(0.0, 0.0, s)]
+        while heap:
+            _f, d, k = heapq.heappop(heap)
+            if k == g:
+                break
+            if d > dist.get(k, math.inf):
+                continue
+            for j, mid in (nm.adj[k] if k < len(nm.adj) else {}).items():
+                nd = d + math.hypot(cen[k][0] - mid[0], cen[k][1] - mid[1]) + math.hypot(cen[j][0] - mid[0], cen[j][1] - mid[1])
+                if nd < dist.get(j, math.inf):
+                    dist[j], prev[j] = nd, (k, mid)
+                    heapq.heappush(heap, (nd + math.hypot(cen[j][0] - gx, cen[j][1] - gy), nd, j))
+        if g not in dist:
+            continue
+        pts, k = [(gx, gy)], g
+        while k != s:
+            k, mid = prev[k]
+            pts.append((float(mid[0]), float(mid[1])))
+        pts.append((sx, sy))
+        pts.reverse()
+        info.update(goal_poly=g, goal_h=round(gh, 1), length=round(sum(
+            math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:])), 1), polys=len(prev))
+        return pts, info
+    info["why"] = "no linked way to a surface at the goal" + (" on another level" if other_level else "")
+    return None, info
+
+
+class MeshIndex:
+    """Raw navmesh files for one planet, loaded when first needed, by the area they cover."""
+
+    def __init__(self, folder: str, planet: str):
+        self.folder, self.planet, self._meshes = folder, planet, None
+
+    def _all(self):
+        if self._meshes is None:
+            self._meshes = []
+            if self.folder and os.path.isdir(self.folder):
+                for name in sorted(os.listdir(self.folder)):
+                    if not name.startswith(self.planet + "_") or name.endswith((".obj", ".png", ".npz")):
+                        continue
+                    try:
+                        self._meshes.append(load(os.path.join(self.folder, name)))
+                    except Exception as e:                      # one bad file shouldn't stop the rest
+                        print(f"[navmesh] {name}: {e}")
+        return self._meshes
+
+    def at(self, x: float, y: float):
+        for nm in self._all():
+            if nm.bmin[0] - 5 <= x <= nm.bmax[0] + 5 and nm.bmin[1] - 5 <= y <= nm.bmax[1] + 5:
+                return nm
         return None

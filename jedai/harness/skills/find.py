@@ -209,22 +209,34 @@ class FindNearest(TravelTo):
             return Result("ok", "seen", data)
         self._on_foot(state)
         # two more spots, at a right angle, so the three aren't in a line
-        turn = "RIGHT"
+        # 17 Nov: it read "3 m" on its way round and walked on, because only the reading after
+        # the final walk was checked. Any reading within reach ends it, wherever it came from.
+        def in_reach(p, g):
+            if g is not None and g[1] <= use_range and p is not None:
+                data.update(dist=g[1], pos=p)
+                return True
+            return False
+        est, done = None, False
         for i in range(2):
             keys.tap("FORWARD", 1.4)
             self.sleep(0.4)
             p, g = self._reading(info, f"spot{i + 2}", readings)
             if g is None:
                 break
+            if in_reach(p, g):
+                pos, got, done = p, g, True
+                break
             self._turn(90.0)
-        est = None
-        for attempt in range(6):
+        for attempt in range(0 if done else 6):
             if len(readings) < 3 or places.spread(readings) < 1.0:
                 # still in a line (walked into a wall?): turn and step again
                 self._turn(120.0)
                 keys.tap("FORWARD", 1.4)
                 self.sleep(0.4)
-                self._reading(info, f"extra{attempt}", readings)
+                p, g = self._reading(info, f"extra{attempt}", readings)
+                if in_reach(p, g):
+                    pos, got = p, g
+                    break
                 continue
             est = places.locate(readings)
             print(f"[find] {got[0]} worked out at ({est[0]:.1f}, {est[1]:.1f}), fit {est[2]:.1f} m, from {len(readings)} readings")
